@@ -83,7 +83,8 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 |---|---|---|
 | `VL_STYLE` | `pill` | `pill`: powerline pills · `lean`: flat colored text, p10k-lean style |
 | `VL_LAYOUT` | `fixed` | `fixed`: one line per `VL_SEGMENTS*` var · `auto`: responsive |
-| `VL_MAX_LINES` | `2` | `auto` only — wrap into at most this many lines (`1` = never wrap) |
+| `VL_MAX_LINES` | `3` | `auto` only — wrap into at most this many lines (`1` = never wrap) |
+| `VL_WRAP_MARGIN` | `4` | `auto` only — columns kept free on the right so segments never touch the edge |
 | `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | segments on line 1, in order (the full list in `auto` mode) |
 | `VL_SEGMENTS2` / `VL_SEGMENTS3` | _(empty)_ | `fixed` only — optional second/third line |
 | `VL_CLOCK` | `12h` | `12h` / `24h` / `off` |
@@ -98,9 +99,14 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 ### Responsive layout
 
 With `VL_LAYOUT="auto"` the bar stays on a single line while it fits, and greedily wraps into
-up to `VL_MAX_LINES` rows when the window gets narrow. Width is read from `$COLUMNS`, falling
-back to `stty size` on the controlling terminal; if neither is available the bar stays on one
-line. Once the line cap is reached, remaining segments overflow on the last line.
+up to `VL_MAX_LINES` rows when the window gets narrow. Once the line cap is reached, remaining
+segments overflow on the last line. `VL_WRAP_MARGIN` keeps a few columns free on the right so
+wrapped lines never butt against the window edge — raise it if your terminal adds padding.
+
+Width comes from `$COLUMNS`. Claude Code v2.1.153+ sets `COLUMNS` to the current terminal width
+before running the status line, so wrapping responds to window resizing out of the box. Outside
+Claude Code the script falls back to `stty size` on the controlling terminal; if neither is
+available it stays on one line.
 
 ```text
 wide window:    ~/dev/app  ⎇ main  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62%  5h ▰▰▱▱▱ 41%  $1.23  ⊙ 14:45

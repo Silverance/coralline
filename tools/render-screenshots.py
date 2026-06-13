@@ -255,7 +255,7 @@ MID  = payload(62, 891234, 45600, 623000, 12800, 41, 9840, 79, 86400 + 11 * 3600
 HIGH = payload(87, 1934000, 98400, 1620000, 45200, 91, 2820, 68, 3 * 86400 + 11 * 3600 + 300, 4.52,
                ladd=321, ldel=87, dur_ms=2820000)
 
-def run_bar(theme, segments, payload_json, extra_conf=""):
+def run_bar(theme, segments, payload_json, extra_conf="", cols=None):
     conf = FAKE_HOME / "render.conf"
     conf.write_text(
         f'. {REPO}/themes/{theme}.conf\n'
@@ -263,6 +263,10 @@ def run_bar(theme, segments, payload_json, extra_conf=""):
         f'VL_CLOCK="24h"\nVL_CLOCK_SECONDS=0\n{extra_conf}'
     )
     env = dict(os.environ, HOME=str(FAKE_HOME), CORALLINE_CONFIG=str(conf))
+    if cols is not None:
+        env["COLUMNS"] = str(cols)
+    else:
+        env.pop("COLUMNS", None)
     out = subprocess.run(["bash", str(REPO / "statusline.sh")],
                          input=payload_json, env=env, check=True,
                          capture_output=True, text=True)
@@ -294,11 +298,21 @@ def lean_blocks():
         ("same data, pill style", run_bar("claude-coral", "dir git model clock", LOW)),
     ]
 
+def wrap_blocks():
+    SEGS = "dir git model ctx limit5h limit7d cost clock"
+    auto = lambda n: f'VL_LAYOUT="auto"\nVL_MAX_LINES={n}\n'
+    return [
+        ("VL_MAX_LINES=1  ·  always one line", run_bar("claude-coral", SEGS, MID, auto(1), cols=120)),
+        ("VL_MAX_LINES=2  ·  COLUMNS=38",      run_bar("claude-coral", SEGS, MID, auto(2), cols=38)),
+        ("VL_MAX_LINES=5  ·  same window",     run_bar("claude-coral", SEGS, MID, auto(5), cols=38)),
+    ]
+
 def main():
     ASSETS.mkdir(exist_ok=True)
     setup_demo_repo()
     render_image("coralline — pick your vibe", hero_blocks(), ASSETS / "hero.png")
     render_image("coralline · lean style", lean_blocks(), ASSETS / "style-lean.png")
+    render_image("coralline · responsive wrap", wrap_blocks(), ASSETS / "wrap-demo.png")
     for theme in THEMES:
         render_image(f"coralline · {theme}", theme_blocks(theme),
                      ASSETS / f"theme-{theme}.png")

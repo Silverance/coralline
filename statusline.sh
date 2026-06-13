@@ -17,7 +17,9 @@ VL_STYLE="pill"                 # pill: powerline pills · lean: p10k-lean flat 
 VL_LEAN_SEP=""                  # lean only — extra text between segments, e.g. "·"
 VL_LAYOUT="fixed"               # fixed: one line per VL_SEGMENTS* var
                                 # auto:  single line, wraps when the window is narrow
-VL_MAX_LINES=2                  # auto only — wrap into at most this many lines
+VL_MAX_LINES=3                  # auto only — wrap into at most this many lines
+VL_WRAP_MARGIN=4                # auto only — keep this many columns free on the right.
+                                # 4 covers Claude Code's full-width L/R padding (2 cols each)
 VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 VL_SEGMENTS2=""                 # fixed only — optional second line
 VL_SEGMENTS3=""                 # fixed only — optional third line
@@ -371,6 +373,9 @@ if [ "$VL_LAYOUT" = "auto" ]; then
     print_range 0 $((total - 1))
     exit 0
   fi
+  # Reserve a right-hand margin so wrapped lines never touch the window edge.
+  W=$(( W - VL_WRAP_MARGIN ))
+  [ "$W" -lt 1 ] && W=1
   # Greedy wrap: per line, width = caps + segment widths + separators.
   # Once VL_MAX_LINES is reached, everything left stays on the last line.
   if [ "$VL_STYLE" = "lean" ]; then CAP_W=0 ; SEP_W=${#VL_LEAN_SEP}

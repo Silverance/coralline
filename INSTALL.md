@@ -158,7 +158,8 @@ Write the user's answers into the config. Template:
 
 VL_STYLE="pill"          # pill: powerline pills · lean: flat p10k-lean text
 VL_LAYOUT="auto"         # auto: responsive · fixed: pinned rows
-VL_MAX_LINES=2           # auto only — wrap cap (1 = never wrap)
+VL_MAX_LINES=3           # auto only — wrap cap (1 = never wrap)
+VL_WRAP_MARGIN=4         # auto only — columns kept free on the right edge
 VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 VL_SEGMENTS2=""          # fixed only — second line, e.g. "lines style duration"
 VL_SEGMENTS3=""          # fixed only — third line
