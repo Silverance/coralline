@@ -132,7 +132,8 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_CLOCK_SECONDS` | `1` | show seconds in the clock |
 | `VL_BAR_WIDTH` | `5` | gauge width in cells |
 | `VL_PATH_DEPTH` | `4` | collapse paths deeper than this |
-| `VL_NAME_MAX` | `0` | max chars for the `project` / `git` names before `…` truncation (`0` = off) |
+| `VL_NAME_MAX` | `0` | max chars for the `dir` leaf / `project` / `git` / `worktree` names before `…` truncation (`0` = off) |
+| `VL_CTX_TOKENS` | `full` | `ctx` token detail: `full` (↑↓ + cache) · `io` (↑↓ only) · `off` |
 | `VL_COST_DECIMALS` | `2` | decimal places for the cost segment |
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
 | `VL_GIT_CACHE` | `0` | reuse `git status` for this many seconds (helps huge repos at `refreshInterval: 1`); `0` = always live |

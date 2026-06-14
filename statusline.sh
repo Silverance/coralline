@@ -40,6 +40,7 @@ VL_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 VL_SEGMENTS2=""                 # fixed only — optional second line
 VL_SEGMENTS3=""                 # fixed only — optional third line
 VL_BAR_WIDTH=5
+VL_CTX_TOKENS="full"            # ctx token detail: full (↑↓ + cache) | io (↑↓ only) | off
 VL_BAR_FILL="▰"
 VL_BAR_EMPTY="▱"
 VL_CLOCK="12h"                  # 12h | 24h | off
@@ -407,11 +408,14 @@ seg_project() {  # stable repo-root name (same in every worktree); hidden outsid
 
 seg_dir() {
   [ -n "$cwd" ] || return 0
-  local short="${cwd/#$HOME/~}" n
+  local short="${cwd/#$HOME/~}" n last
   local IFS='/'; set -- $short; n=$#
+  eval "last=\${$n}"
+  last="$(trunc "$last" "$VL_NAME_MAX")"          # truncate the long leaf (e.g. repo dir)
   if [ "$n" -gt "$VL_PATH_DEPTH" ]; then
-    eval "last=\${$n}"
     short="$1/$2/…/$last"
+  else
+    case "$short" in */*) short="${short%/*}/$last" ;; *) short="$last" ;; esac
   fi
   push "$VL_BG_DIR" "${BOLD}$(fg $VL_FG_TEXT) ${short} ${NORM}"
 }
@@ -433,10 +437,15 @@ seg_model() {
 
 seg_ctx() {
   [ -n "$ctx_pct" ] || return 0
-  local ci bar cn
+  local ci bar cn det=""
   ci=$(printf '%.0f' "$ctx_pct" 2>/dev/null) || ci=0
   bar=$(make_bar "$ci"); cn=$(pct_fg "$ci")
-  push "$VL_BG_CTX" "$(fg $cn) ⬡ ${bar} ${ci}% $(fg $VL_FG_DIM)↑$(fmt_tok $tok_in) ↓$(fmt_tok $tok_out) cr:$(fmt_tok $tok_cr) cw:$(fmt_tok $tok_cw) "
+  case "$VL_CTX_TOKENS" in
+    off) ;;
+    io)  det="$(fg $VL_FG_DIM)↑$(fmt_tok $tok_in) ↓$(fmt_tok $tok_out) " ;;
+    *)   det="$(fg $VL_FG_DIM)↑$(fmt_tok $tok_in) ↓$(fmt_tok $tok_out) cr:$(fmt_tok $tok_cr) cw:$(fmt_tok $tok_cw) " ;;
+  esac
+  push "$VL_BG_CTX" "$(fg $cn) ⬡ ${bar} ${ci}% ${det}"
 }
 
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg
