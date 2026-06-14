@@ -79,6 +79,29 @@ Then add to `~/.claude/settings.json`:
 > **Note:** requires `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal.
 > No Nerd Font? Set `VL_ASCII=1` in your config for a glyph-free rendering.
 
+### Verify your setup
+
+Run the script with `--doctor` to check your config without waiting for Claude Code to feed
+it a session — it reports the config it loaded, whether `jq` is present, flags any unknown
+segment names, and prints a sample bar:
+
+```bash
+bash ~/.claude/coralline/statusline.sh --doctor
+```
+
+### Warp terminal
+
+coralline renders cleanly in [Warp](https://www.warp.dev/) — it supports true-color and Nerd
+Font powerline glyphs out of the box. Two things to set:
+
+- **Font:** Settings → Appearance → Text → pick a Nerd Font (e.g. *MesloLGS Nerd Font*), so the
+  pill caps and segment glyphs render. Without one, set `VL_ASCII=1`.
+- **Theme:** the bundled [`warp` theme](./themes/warp.conf) is tuned to Warp's default dark
+  palette — source it from your `coralline.conf` to match.
+
+The responsive `auto` layout reacts to window resizing in Warp the same as any terminal: Claude
+Code sets `COLUMNS` before each render, and coralline wraps to fit.
+
 ## Configuration
 
 Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the script):
@@ -98,6 +121,7 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_NAME_MAX` | `0` | max chars for the `project` / `git` names before `…` truncation (`0` = off) |
 | `VL_COST_DECIMALS` | `2` | decimal places for the cost segment |
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
+| `VL_GIT_CACHE` | `0` | reuse `git status` for this many seconds (helps huge repos at `refreshInterval: 1`); `0` = always live |
 | `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |
 | `VL_BG_*` / `VL_FG_*` | theme | colors — `256`-color index or `"R,G,B"` |
 
@@ -147,6 +171,7 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 | **`claude-coral`** — steel blue · mauve · Claude coral (default)<br>![claude-coral theme preview](./assets/theme-claude-coral.png) | **`catppuccin-mocha`** — soft pastels on dark<br>![catppuccin-mocha theme preview](./assets/theme-catppuccin-mocha.png) |
 | **`nord`** — arctic frost<br>![nord theme preview](./assets/theme-nord.png) | **`gruvbox-dark`** — warm retro<br>![gruvbox-dark theme preview](./assets/theme-gruvbox-dark.png) |
 | **`tokyo-night`** — neon on deep navy<br>![tokyo-night theme preview](./assets/theme-tokyo-night.png) | **`mono`** — grayscale minimalism<br>![mono theme preview](./assets/theme-mono.png) |
+| **`warp`** — tuned to Warp's default dark theme<br>![warp theme preview](./assets/theme-warp.png) | |
 
 A theme is just a `.conf` file assigning `VL_BG_*` / `VL_FG_*` — copy one, change the colors,
 and source yours from `coralline.conf` instead. PRs with new themes are welcome.

@@ -9,8 +9,24 @@
 #   * Everything themeable via ~/.claude/coralline.conf (sourced bash)
 #
 # Requires: jq, and a Nerd Font terminal unless VL_ASCII=1
+#
+# Flags:
+#   --doctor / --check   validate the config and render a sample bar, without
+#                        needing Claude Code to pipe a session on stdin
 
-input=$(cat)
+case "$1" in --doctor|--check) VL_DOCTOR=1 ;; esac
+
+if [ "${VL_DOCTOR:-0}" = "1" ]; then
+  # Synthetic session so --doctor renders a preview outside Claude Code.
+  input='{"workspace":{"current_dir":"'"$PWD"'"},"model":{"display_name":"Claude Fable 5"},"output_style":{"name":"Explanatory"},"context_window":{"used_percentage":62,"total_input_tokens":1234567,"total_output_tokens":45678,"current_usage":{"cache_read_input_tokens":98765,"cache_creation_input_tokens":4321}},"rate_limits":{"five_hour":{"used_percentage":41},"seven_day":{"used_percentage":79}},"cost":{"total_cost_usd":1.23,"total_lines_added":321,"total_lines_removed":87,"total_duration_ms":5432100}}'
+else
+  input=$(cat)
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'coralline: jq not found — install it from https://jqlang.github.io/jq/\n'
+  exit 0
+fi
 
 # ── Defaults (every value can be overridden by the config file) ──────────────
 VL_STYLE="pill"                 # pill: powerline pills · lean: p10k-lean flat text
@@ -33,6 +49,8 @@ VL_NAME_MAX=0                   # max chars for project/git names before … tru
 VL_COST_DECIMALS=2
 VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
+VL_GIT_CACHE=0                  # >0 = reuse `git status` for this many seconds, so
+                                # huge repos don't re-scan every render; 0 = always live
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
 
 # Powerline glyphs (overridable; cleared when VL_ASCII=1)
@@ -185,6 +203,31 @@ pct_fg() {
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
+
+# Raw `git status` output, optionally reused for VL_GIT_CACHE seconds so a huge
+# repo doesn't get re-scanned on every render. The cache file (keyed by cwd)
+# holds the write epoch on line 1 and the porcelain output below it.
+git_status_raw() {
+  local cache now content
+  if [ "${VL_GIT_CACHE:-0}" -gt 0 ] 2>/dev/null; then
+    cache="${TMPDIR:-/tmp}/coralline-git-${cwd//\//%}"
+    now=$(date +%s)
+    if [ -f "$cache" ]; then
+      content=$(<"$cache")
+      if [ "$(( now - ${content%%$'\n'*} ))" -lt "$VL_GIT_CACHE" ] 2>/dev/null; then
+        printf '%s' "${content#*$'\n'}"
+        return
+      fi
+    fi
+    content=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
+    printf '%s\n%s' "$now" "$content" > "$cache.$$" 2>/dev/null &&
+      mv "$cache.$$" "$cache" 2>/dev/null
+    printf '%s' "$content"
+  else
+    git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null
+  fi
+}
+
 read_git() {
   local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0
   [ -n "$cwd" ] || return
@@ -200,7 +243,7 @@ read_git() {
       "u "*)                 unstaged=1 ;;
     esac
   done <<GIT
-$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
+$(git_status_raw)
 GIT
   [ -z "$oid" ] && return                     # not a repo
   if [ "$head" = "(detached)" ] || [ -z "$head" ]; then
@@ -233,20 +276,57 @@ case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*|*" pr
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
 ESC=$'\033'
-seg_len() {  # visible char count of $1 with ANSI sequences stripped → SEG_LEN_R
+strip_ansi() {  # → STRIP_R = $1 with ANSI CSI sequences removed
   local s="$1" plain=""
   while [ "${s#*$ESC}" != "$s" ]; do
     plain+="${s%%$ESC*}"
     s="${s#*$ESC}" ; s="${s#*m}"
   done
-  plain+="$s"
-  SEG_LEN_R=${#plain}
+  STRIP_R="$plain$s"
+}
+
+# Display columns of a plain (ANSI-free) string. Pure-ASCII strings are just
+# their length; otherwise the UTF-8 bytes are decoded to codepoints so that
+# CJK/Kana/Hangul/fullwidth/emoji count as two cells and the responsive layout
+# wraps correctly for non-Latin names. (bash's printf "'c" gives the first byte,
+# not the codepoint, so we decode by hand under LC_ALL=C byte semantics.)
+disp_width() {
+  local s="$1" w=0
+  if [ "${s//[!$'\001'-$'\177']/}" = "$s" ]; then printf '%s' "${#s}"; return; fi
+  local LC_ALL=C LANG=                      # byte semantics for the decode below
+  local n=${#s} i=0 b cp extra              # n must be BYTE count, so set after locale
+  while [ "$i" -lt "$n" ]; do
+    b=$(printf '%d' "'${s:i:1}"); [ "$b" -lt 0 ] && b=$(( b + 256 ))
+    if   [ "$b" -lt 192 ]; then cp=$b;             extra=0   # ASCII / stray byte
+    elif [ "$b" -lt 224 ]; then cp=$(( b - 192 )); extra=1   # 2-byte lead
+    elif [ "$b" -lt 240 ]; then cp=$(( b - 224 )); extra=2   # 3-byte lead
+    else                        cp=$(( b - 240 )); extra=3   # 4-byte lead
+    fi
+    i=$(( i + 1 ))
+    while [ "$extra" -gt 0 ] && [ "$i" -lt "$n" ]; do
+      b=$(printf '%d' "'${s:i:1}"); [ "$b" -lt 0 ] && b=$(( b + 256 ))
+      cp=$(( cp * 64 + (b - 128) )); i=$(( i + 1 )); extra=$(( extra - 1 ))
+    done
+    if { [ "$cp" -ge 4352   ] && [ "$cp" -le 4447   ]; } ||   # Hangul Jamo
+       { [ "$cp" -ge 8986   ] && [ "$cp" -le 8987   ]; } ||   # watch · hourglass
+       { [ "$cp" -ge 11904  ] && [ "$cp" -le 19903  ]; } ||   # CJK radicals … ext-A
+       { [ "$cp" -ge 19968  ] && [ "$cp" -le 40959  ]; } ||   # CJK Unified
+       { [ "$cp" -ge 44032  ] && [ "$cp" -le 55203  ]; } ||   # Hangul syllables
+       { [ "$cp" -ge 63744  ] && [ "$cp" -le 64255  ]; } ||   # CJK compatibility
+       { [ "$cp" -ge 65040  ] && [ "$cp" -le 65135  ]; } ||   # CJK compat forms
+       { [ "$cp" -ge 65280  ] && [ "$cp" -le 65519  ]; } ||   # fullwidth forms
+       { [ "$cp" -ge 127744 ] && [ "$cp" -le 129791 ]; } ||   # emoji
+       [ "$cp" -ge 131072 ]; then                             # CJK ext-B and beyond
+      w=$(( w + 2 ))
+    else
+      w=$(( w + 1 ))
+    fi
+  done
+  printf '%s' "$w"
 }
 push() {
-  seg_len "$2"
   SEG_BGS[${#SEG_BGS[@]}]="$1"
   SEG_TXT[${#SEG_TXT[@]}]="$2"
-  SEG_LEN[${#SEG_LEN[@]}]="$SEG_LEN_R"
 }
 
 trunc() {  # echo $1 clipped to $2 visible chars, middle-truncated with … ; $2=0/unset → unchanged
@@ -393,10 +473,32 @@ term_cols() {
   printf '%s' "$c"
 }
 
+if [ "${VL_DOCTOR:-0}" = "1" ]; then
+  {
+    printf 'coralline doctor\n'
+    printf '  config : %s' "$VL_CONF"
+    [ -f "$VL_CONF" ] && printf ' (found)\n' || printf ' (not found — using defaults)\n'
+    printf '  jq     : ok\n'
+    printf '  style  : %s · layout: %s\n' "$VL_STYLE" "$VL_LAYOUT"
+    for s in $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3; do
+      if command -v "seg_$s" >/dev/null 2>&1; then
+        printf '  segment: %-10s ok\n' "$s"
+      else
+        printf '  segment: %-10s UNKNOWN — not a valid segment name\n' "$s"
+      fi
+    done
+    printf '  preview:\n'
+  } >&2
+fi
+
 if [ "$VL_LAYOUT" = "auto" ]; then
   build_segments "$VL_SEGMENTS"
   total=${#SEG_BGS[@]}
   [ "$total" -eq 0 ] && exit 0
+  for ((i=0; i<total; i++)); do
+    strip_ansi "${SEG_TXT[i]}"
+    SEG_LEN[i]=$(disp_width "$STRIP_R")
+  done
   W=$(term_cols)
   if [ "$W" -le 0 ] || [ "$VL_MAX_LINES" -le 1 ]; then
     print_range 0 $((total - 1))
