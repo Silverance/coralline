@@ -48,7 +48,7 @@ config editing required.
 | `effort` | thinking effort level (`✲ high`), when set |
 | `cache` | prompt-cache hit rate (`↯`) from token counts already on stdin |
 | `vim` | vim mode (`⌨ NORMAL`), when vim mode is on |
-| `worktree` | Claude Code worktree name + branch (`⧉`), when in one |
+| `worktree` | linked-worktree badge (`⧉`) — Claude Code's `.worktree.*` if present, else git-detected (shows the parent repo); hidden in the main worktree |
 | `version` | Claude Code CLI version |
 | `session` | short session id (`#abcd1234`) |
 | `custom` | first line of `VL_CUSTOM_CMD`'s output |
@@ -138,7 +138,7 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
 | `VL_GIT_CACHE` | `0` | reuse `git status` for this many seconds (helps huge repos at `refreshInterval: 1`); `0` = always live |
 | `VL_LIMIT_RESET` | `countdown` | limit-gauge reset display: `countdown` · `clock` (absolute time) · `both` |
-| `VL_GIT_LINK` | `0` | `1` = OSC 8 hyperlink the git branch to its GitHub page (needs a terminal that passes OSC 8 through) |
+| `VL_GIT_LINK` | `0` | `1` = OSC 8 hyperlink the git branch to its GitHub page. Note: Claude Code's statusline strips OSC sequences, so this only shows up if you run the script outside Claude Code in an OSC 8-capable terminal |
 | `VL_CUSTOM_CMD` | _(empty)_ | shell command for the `custom` segment (first line of stdout is shown) |
 | `VL_CUSTOM_TIMEOUT` | `1` | seconds before the custom command is killed (when `timeout`/`gtimeout` is available) |
 | `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |

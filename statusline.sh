@@ -239,7 +239,7 @@ pct_fg() {
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
-GIT_SHA="" GIT_CONFLICTS=0 GIT_LINK=""
+GIT_SHA="" GIT_CONFLICTS=0 GIT_LINK="" GIT_WT=""
 
 # Raw `git status` output, optionally reused for VL_GIT_CACHE seconds so a huge
 # repo doesn't get re-scanned on every render. The cache file (keyed by cwd)
@@ -302,18 +302,21 @@ GIT
     url="${url%.git}"
     case "$url" in https://*) GIT_LINK="${url}/tree/${head}" ;; esac
   fi
-  # Stable project name (seg_project): basename of the MAIN repo root, which is
-  # shared by every linked worktree — so it stays constant whichever worktree
-  # you're in. Resolved only when the project segment is enabled, to keep the
-  # one-git-call default untouched.
-  case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" project "*)
-    local cdir
-    cdir=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  # Resolve the MAIN repo root (seg_project) and linked-worktree status
+  # (seg_worktree) in one rev-parse. The common git-dir is shared by every
+  # linked worktree, so GIT_ROOT stays constant whichever worktree you're in;
+  # when the per-worktree git-dir lives under .../worktrees/<name>, this is a
+  # linked worktree and GIT_WT is its name. Only run when those segments are on.
+  case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" project "*|*" worktree "*)
+    local rp gdir cdir
+    rp=$(git -C "$cwd" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)
+    gdir="${rp%%$'\n'*}" ; cdir="${rp#*$'\n'}"
     [ -n "$cdir" ] || cdir=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
     if [ -n "$cdir" ]; then
       cdir="${cdir%/}" ; cdir="${cdir%/.git}"
       GIT_ROOT="${cdir##*/}"
-    fi ;;
+    fi
+    case "$gdir" in *"/worktrees/"*) GIT_WT="${gdir##*/}" ;; esac ;;
   esac
   [ "$staged"    -eq 1 ] && GIT_MARKS="${GIT_MARKS}+"
   [ "$unstaged"  -eq 1 ] && GIT_MARKS="${GIT_MARKS}!"
@@ -528,10 +531,17 @@ seg_cache() {  # cache hit rate from token counts already on stdin
   push "$VL_BG_CACHE" "$(fg $cn) ↯ ${hit}% "
 }
 
-seg_worktree() {  # worktree name + branch (.worktree.*)
-  [ -n "$wt_name" ] && [ "$wt_name" != "null" ] || return 0
-  local b=""; [ -n "$wt_branch" ] && [ "$wt_branch" != "null" ] && b=" ⎇ ${wt_branch}"
-  push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⧉ $(trunc "$wt_name" "$VL_NAME_MAX")${b} "
+seg_worktree() {  # linked-worktree badge: prefers Claude Code's .worktree.*,
+                  # falls back to git (shows the parent repo it branches from)
+  local name=""
+  if [ -n "$wt_name" ] && [ "$wt_name" != "null" ]; then
+    name="$wt_name"
+    [ -n "$wt_branch" ] && [ "$wt_branch" != "null" ] && name="${name} ⎇ ${wt_branch}"
+  elif [ -n "$GIT_WT" ]; then
+    name="$GIT_ROOT"                            # parent project of this linked worktree
+  fi
+  [ -n "$name" ] || return 0
+  push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⧉ $(trunc "$name" "$VL_NAME_MAX") "
 }
 
 seg_version() {  # Claude Code CLI version (.version)
