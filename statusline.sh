@@ -18,7 +18,7 @@ case "$1" in --doctor|--check) VL_DOCTOR=1 ;; esac
 
 if [ "${VL_DOCTOR:-0}" = "1" ]; then
   # Synthetic session so --doctor renders a preview outside Claude Code.
-  input='{"workspace":{"current_dir":"'"$PWD"'"},"model":{"display_name":"Claude Fable 5"},"output_style":{"name":"Explanatory"},"context_window":{"used_percentage":62,"total_input_tokens":1234567,"total_output_tokens":45678,"current_usage":{"cache_read_input_tokens":98765,"cache_creation_input_tokens":4321}},"rate_limits":{"five_hour":{"used_percentage":41},"seven_day":{"used_percentage":79}},"cost":{"total_cost_usd":1.23,"total_lines_added":321,"total_lines_removed":87,"total_duration_ms":5432100}}'
+  input='{"workspace":{"current_dir":"'"$PWD"'"},"model":{"display_name":"Claude Fable 5"},"version":"2.1.160","session_id":"abcd1234-5678-90ef","effort":{"level":"high"},"vim":{"mode":"NORMAL"},"worktree":{"name":"demo-wt","branch":"feat/demo"},"output_style":{"name":"Explanatory"},"context_window":{"used_percentage":62,"total_input_tokens":1234567,"total_output_tokens":45678,"current_usage":{"cache_read_input_tokens":98765,"cache_creation_input_tokens":4321}},"rate_limits":{"five_hour":{"used_percentage":41},"seven_day":{"used_percentage":79},"seven_day_sonnet":{"used_percentage":55},"seven_day_opus":{"used_percentage":88}},"cost":{"total_cost_usd":1.23,"total_lines_added":321,"total_lines_removed":87,"total_duration_ms":5432100}}'
 else
   input=$(cat)
 fi
@@ -51,6 +51,11 @@ VL_WARN_PCT=50                  # percentage thresholds for bar colors
 VL_HOT_PCT=75
 VL_GIT_CACHE=0                  # >0 = reuse `git status` for this many seconds, so
                                 # huge repos don't re-scan every render; 0 = always live
+VL_LIMIT_RESET="countdown"      # limit gauges: countdown | clock (absolute) | both
+VL_GIT_LINK=0                   # 1 = OSC 8 hyperlink the git branch to its GitHub page
+                                # (opt-in; needs a terminal that passes OSC 8 through)
+VL_CUSTOM_CMD=""                # shell command for the `custom` segment (first line of stdout)
+VL_CUSTOM_TIMEOUT=1             # seconds before the custom command is killed (if `timeout` exists)
 VL_ASCII=0                      # 1 = no Nerd Font glyphs (plain colored blocks)
 
 # Powerline glyphs (overridable; cleared when VL_ASCII=1)
@@ -71,6 +76,17 @@ VL_BG_CLOCK="70,80,110"
 VL_BG_LINES=240
 VL_BG_STYLE=96
 VL_BG_DURATION=60
+# New segments fall back to these if a theme doesn't set them (themes only need
+# to override what they want to recolor).
+VL_BG_EFFORT="${VL_BG_EFFORT:-97}"
+VL_BG_VIM="${VL_BG_VIM:-240}"
+VL_BG_CACHE="${VL_BG_CACHE:-238}"
+VL_BG_WORKTREE="${VL_BG_WORKTREE:-66}"
+VL_BG_VERSION="${VL_BG_VERSION:-238}"
+VL_BG_SESSION="${VL_BG_SESSION:-238}"
+VL_BG_SHA="${VL_BG_SHA:-240}"
+VL_BG_CONFLICT="${VL_BG_CONFLICT:-160}"
+VL_BG_CUSTOM="${VL_BG_CUSTOM:-240}"
 
 VL_FG_TEXT=231
 VL_FG_DIM=245
@@ -99,7 +115,9 @@ fi
 # IFS preserves empty fields instead of collapsing consecutive delimiters.
 IFS=$'\037' read -r cwd model ctx_pct tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost \
-                 lines_add lines_del out_style dur_ms <<JSON
+                 lines_add lines_del out_style dur_ms \
+                 effort_lvl vim_mode cc_ver session_id wt_name wt_branch \
+                 s7_pct s7_rst o7_pct o7_rst <<JSON
 $(printf '%s' "$input" | jq -r '[
   (.workspace.current_dir // .cwd // ""),
   (.model.display_name // ""),
@@ -116,7 +134,17 @@ $(printf '%s' "$input" | jq -r '[
   (.cost.total_lines_added // 0),
   (.cost.total_lines_removed // 0),
   (.output_style.name // ""),
-  (.cost.total_duration_ms // 0)
+  (.cost.total_duration_ms // 0),
+  (.effort.level // ""),
+  (.vim.mode // ""),
+  (.version // ""),
+  (.session_id // ""),
+  (.worktree.name // ""),
+  (.worktree.branch // ""),
+  (.rate_limits.seven_day_sonnet.used_percentage // "" | tostring),
+  (.rate_limits.seven_day_sonnet.resets_at // "" | tostring),
+  (.rate_limits.seven_day_opus.used_percentage // "" | tostring),
+  (.rate_limits.seven_day_opus.resets_at // "" | tostring)
 ] | map(tostring) | join("\u001f")' 2>/dev/null)
 JSON
 
@@ -194,6 +222,13 @@ fmt_duration() {
   else                      printf '%ds' "$s"; fi
 }
 
+# Absolute wall-clock time a limit resets at, in the VL_CLOCK format.
+fmt_resetclock() {
+  local epoch fmt; epoch=$(to_epoch "$1") || return 0
+  if [ "$VL_CLOCK" = "12h" ]; then fmt='%I:%M%p'; else fmt='%H:%M'; fi
+  date -r "$epoch" "+$fmt" 2>/dev/null || date -d "@$epoch" "+$fmt" 2>/dev/null
+}
+
 pct_fg() {
   local pct="${1:-0}"
   if   [ "$pct" -ge "$VL_HOT_PCT" ];  then printf '%s' "$VL_FG_HOT"
@@ -203,6 +238,7 @@ pct_fg() {
 
 # ── Git state (single subprocess, parsed once, used by git/stash segments) ──
 GIT_BRANCH="" GIT_MARKS="" GIT_AB="" GIT_DIRTY=0 GIT_ROOT=""
+GIT_SHA="" GIT_CONFLICTS=0 GIT_LINK=""
 
 # Raw `git status` output, optionally reused for VL_GIT_CACHE seconds so a huge
 # repo doesn't get re-scanned on every render. The cache file (keyed by cwd)
@@ -229,7 +265,7 @@ git_status_raw() {
 }
 
 read_git() {
-  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0
+  local line oid="" head="" a="" b="" staged=0 unstaged=0 untracked=0 conflicts=0
   [ -n "$cwd" ] || return
   while IFS= read -r line; do
     case "$line" in
@@ -240,16 +276,30 @@ read_git() {
       [12]" "*)              line="${line#? }"
                              case "${line:0:1}" in [!.]) staged=1 ;; esac
                              case "${line:1:1}" in [!.]) unstaged=1 ;; esac ;;
-      "u "*)                 unstaged=1 ;;
+      "u "*)                 unstaged=1; conflicts=$(( conflicts + 1 )) ;;
     esac
   done <<GIT
 $(git_status_raw)
 GIT
   [ -z "$oid" ] && return                     # not a repo
+  GIT_SHA="${oid:0:7}"                         # short commit hash (seg_sha)
+  GIT_CONFLICTS=$conflicts                      # unmerged paths (seg_conflicts)
   if [ "$head" = "(detached)" ] || [ -z "$head" ]; then
     GIT_BRANCH="${oid:0:7}"
   else
     GIT_BRANCH="$head"
+  fi
+  # Optional OSC 8 hyperlink target for the branch — one extra git call, only
+  # when the user opts in. Normalises git@host:owner/repo(.git) and https URLs
+  # to https://host/owner/repo/tree/<branch>.
+  if [ "$VL_GIT_LINK" = "1" ] && [ -n "$head" ] && [ "$head" != "(detached)" ]; then
+    local url="$(git -C "$cwd" config --get remote.origin.url 2>/dev/null)"
+    case "$url" in
+      git@*:*)     url="${url#git@}"; url="https://${url%%:*}/${url#*:}" ;;
+      ssh://git@*) url="https://${url#ssh://git@}" ;;
+    esac
+    url="${url%.git}"
+    case "$url" in https://*) GIT_LINK="${url}/tree/${head}" ;; esac
   fi
   # Stable project name (seg_project): basename of the MAIN repo root, which is
   # shared by every linked worktree — so it stays constant whichever worktree
@@ -271,16 +321,27 @@ GIT
   [ "${b:-0}" -gt 0 ] 2>/dev/null && GIT_AB="${GIT_AB}⇣${b}"
   [ -n "$GIT_MARKS" ] && GIT_DIRTY=1
 }
-case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in *" git "*|*" stash "*|*" project "*) read_git ;; esac
+case " $VL_SEGMENTS $VL_SEGMENTS2 $VL_SEGMENTS3 " in
+  *" git "*|*" stash "*|*" project "*|*" sha "*|*" conflicts "*) read_git ;;
+esac
 
 # ── Segments ─────────────────────────────────────────────────────────────────
 # Each seg_* appends (background, text, visible width) to the segment arrays.
 ESC=$'\033'
-strip_ansi() {  # → STRIP_R = $1 with ANSI CSI sequences removed
-  local s="$1" plain=""
+strip_ansi() {  # → STRIP_R = $1 with ANSI CSI (…m) and OSC 8 (…ST) sequences removed
+  local s="$1" plain="" rest
   while [ "${s#*$ESC}" != "$s" ]; do
-    plain+="${s%%$ESC*}"
-    s="${s#*$ESC}" ; s="${s#*m}"
+    plain+="${s%%$ESC*}"            # text before the ESC
+    rest="${s#*$ESC}"              # everything after it
+    case "$rest" in
+      '['*)  rest="${rest#*m}" ;;                   # CSI colour/style → ends at 'm'
+      ']'*)  case "$rest" in                        # OSC (hyperlinks) → ends at ST or BEL
+               *"$ESC\\"*) rest="${rest#*"$ESC\\"}" ;;
+               *) rest="${rest#*$'\a'}" ;;
+             esac ;;
+      *)     rest="${rest#?}" ;;                    # lone ESC: drop the next byte
+    esac
+    s="$rest"
   done
   STRIP_R="$plain$s"
 }
@@ -357,9 +418,12 @@ seg_dir() {
 
 seg_git() {
   [ -n "$GIT_BRANCH" ] || return 0
-  local bgc="$VL_BG_GIT_OK"
+  local bgc="$VL_BG_GIT_OK" name
   [ "$GIT_DIRTY" -eq 1 ] && bgc="$VL_BG_GIT_DIRTY"
-  push "$bgc" "${BOLD}$(fg $VL_FG_TEXT) ⎇ $(trunc "$GIT_BRANCH" "$VL_NAME_MAX")${GIT_MARKS}${GIT_AB} ${NORM}"
+  name="$(trunc "$GIT_BRANCH" "$VL_NAME_MAX")"
+  # OSC 8 hyperlink: ESC ] 8 ; ; URL ST  text  ESC ] 8 ; ; ST
+  [ -n "$GIT_LINK" ] && name="${ESC}]8;;${GIT_LINK}${ESC}\\${name}${ESC}]8;;${ESC}\\"
+  push "$bgc" "${BOLD}$(fg $VL_FG_TEXT) ⎇ ${name}${GIT_MARKS}${GIT_AB} ${NORM}"
 }
 
 seg_model() {
@@ -377,15 +441,21 @@ seg_ctx() {
 
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg
   [ -n "$2" ] || return 0
-  local v bar cn cd rst=""
+  local v bar cn cd clk rst=""
   v=$(printf '%.0f' "$2" 2>/dev/null) || v=0
   bar=$(make_bar "$v"); cn=$(pct_fg "$v")
-  cd=$(fmt_countdown "$3")
-  [ -n "$cd" ] && rst="$(fg $VL_FG_DIM)↺${cd}"
+  case "$VL_LIMIT_RESET" in
+    clock) clk=$(fmt_resetclock "$3"); [ -n "$clk" ] && rst="$(fg $VL_FG_DIM)↺${clk}" ;;
+    both)  cd=$(fmt_countdown "$3"); clk=$(fmt_resetclock "$3")
+           [ -n "$cd" ] && rst="$(fg $VL_FG_DIM)↺${cd}${clk:+ ${clk}}" ;;
+    *)     cd=$(fmt_countdown "$3"); [ -n "$cd" ] && rst="$(fg $VL_FG_DIM)↺${cd}" ;;
+  esac
   push "$4" "$(fg $cn) $1 ${bar} ${v}% ${rst} "
 }
 seg_limit5h() { seg_limit "5h" "$fh_pct" "$fh_rst" "$VL_BG_5H"; }
 seg_limit7d() { seg_limit "7d" "$wd_pct" "$wd_rst" "$VL_BG_7D"; }
+seg_limit7ds() { seg_limit "7dS" "$s7_pct" "$s7_rst" "$VL_BG_7D"; }  # per-model: Sonnet
+seg_limit7do() { seg_limit "7dO" "$o7_pct" "$o7_rst" "$VL_BG_7D"; }  # per-model: Opus
 
 seg_cost() {
   [ -n "$cost" ] && [ "$cost" != "0" ] || return 0
@@ -427,6 +497,63 @@ seg_stash() {
   n=$(git -C "$cwd" rev-list --walk-reflogs --count refs/stash 2>/dev/null) || return 0
   [ "${n:-0}" -gt 0 ] || return 0
   push "$VL_BG_GIT_OK" "$(fg $VL_FG_TEXT) ⚑ ${n} "
+}
+
+# ── Segments ported from ccstatusline (all free of extra subprocesses) ─────────
+seg_effort() {  # thinking effort level (.effort.level)
+  [ -n "$effort_lvl" ] && [ "$effort_lvl" != "null" ] || return 0
+  push "$VL_BG_EFFORT" "$(fg $VL_FG_TEXT) ✲ ${effort_lvl} "
+}
+
+seg_vim() {  # vim mode (.vim.mode) — hidden unless vim mode is on
+  [ -n "$vim_mode" ] && [ "$vim_mode" != "null" ] || return 0
+  push "$VL_BG_VIM" "$(fg $VL_FG_TEXT) ⌨ ${vim_mode} "
+}
+
+seg_cache() {  # cache hit rate from token counts already on stdin
+  local cr="${tok_cr:-0}" cw="${tok_cw:-0}" total hit cn
+  case "$cr$cw" in *[!0-9]*) return 0 ;; esac
+  total=$(( cr + cw )); [ "$total" -gt 0 ] || return 0
+  hit=$(( (cr * 100 + total / 2) / total ))
+  cn=$(pct_fg $(( 100 - hit )))                 # high hit rate is good → green
+  push "$VL_BG_CACHE" "$(fg $cn) ↯ ${hit}% "
+}
+
+seg_worktree() {  # worktree name + branch (.worktree.*)
+  [ -n "$wt_name" ] && [ "$wt_name" != "null" ] || return 0
+  local b=""; [ -n "$wt_branch" ] && [ "$wt_branch" != "null" ] && b=" ⎇ ${wt_branch}"
+  push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⧉ $(trunc "$wt_name" "$VL_NAME_MAX")${b} "
+}
+
+seg_version() {  # Claude Code CLI version (.version)
+  [ -n "$cc_ver" ] && [ "$cc_ver" != "null" ] || return 0
+  push "$VL_BG_VERSION" "$(fg $VL_FG_DIM) v${cc_ver} "
+}
+
+seg_session() {  # short session id (.session_id)
+  [ -n "$session_id" ] && [ "$session_id" != "null" ] || return 0
+  push "$VL_BG_SESSION" "$(fg $VL_FG_DIM) #${session_id:0:8} "
+}
+
+seg_sha() {  # short commit hash (from branch.oid; no extra git call)
+  [ -n "$GIT_SHA" ] || return 0
+  push "$VL_BG_SHA" "$(fg $VL_FG_DIM) @${GIT_SHA} "
+}
+
+seg_conflicts() {  # unmerged-path count (from git status; no extra git call)
+  [ "${GIT_CONFLICTS:-0}" -gt 0 ] 2>/dev/null || return 0
+  push "$VL_BG_CONFLICT" "$(fg $VL_FG_TEXT) ⚠ ${GIT_CONFLICTS} "
+}
+
+seg_custom() {  # first line of $VL_CUSTOM_CMD's stdout
+  [ -n "$VL_CUSTOM_CMD" ] || return 0
+  local out
+  if   command -v timeout  >/dev/null 2>&1; then out=$(timeout  "$VL_CUSTOM_TIMEOUT" sh -c "$VL_CUSTOM_CMD" 2>/dev/null)
+  elif command -v gtimeout >/dev/null 2>&1; then out=$(gtimeout "$VL_CUSTOM_TIMEOUT" sh -c "$VL_CUSTOM_CMD" 2>/dev/null)
+  else                                           out=$(sh -c "$VL_CUSTOM_CMD" 2>/dev/null); fi
+  out="${out%%$'\n'*}"                          # first line only
+  [ -n "$out" ] || return 0
+  push "$VL_BG_CUSTOM" "$(fg $VL_FG_TEXT) ${out} "
 }
 
 # ── Render ───────────────────────────────────────────────────────────────────

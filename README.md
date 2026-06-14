@@ -36,14 +36,28 @@ config editing required.
 | `model` | active Claude model |
 | `ctx` | context-window gauge, input/output/cache token counts |
 | `limit5h` / `limit7d` | rate-limit gauges with reset countdown |
+| `limit7ds` / `limit7do` | per-model 7-day rate-limit gauges (Sonnet / Opus), when present |
 | `cost` | session cost in USD |
 | `clock` | time, 12h or 24h |
 | `lines` | lines added/removed this session |
 | `style` | active output style |
 | `duration` | session wall-clock duration |
 | `stash` | git stash count |
+| `sha` | short commit hash (`@2b97af9`) — free, from the same `git status` |
+| `conflicts` | unmerged-path count (`⚠`) — free, from the same `git status` |
+| `effort` | thinking effort level (`✲ high`), when set |
+| `cache` | prompt-cache hit rate (`↯`) from token counts already on stdin |
+| `vim` | vim mode (`⌨ NORMAL`), when vim mode is on |
+| `worktree` | Claude Code worktree name + branch (`⧉`), when in one |
+| `version` | Claude Code CLI version |
+| `session` | short session id (`#abcd1234`) |
+| `custom` | first line of `VL_CUSTOM_CMD`'s output |
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
+
+The `effort`, `cache`, `vim`, `worktree`, `version`, `session`, `sha`, and `conflicts` segments
+all read data Claude Code already pipes in (or that's already in the single `git status` call) —
+so they cost no extra subprocess, and hide themselves when their data isn't present.
 
 ## Why it's fast
 
@@ -122,6 +136,10 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_COST_DECIMALS` | `2` | decimal places for the cost segment |
 | `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
 | `VL_GIT_CACHE` | `0` | reuse `git status` for this many seconds (helps huge repos at `refreshInterval: 1`); `0` = always live |
+| `VL_LIMIT_RESET` | `countdown` | limit-gauge reset display: `countdown` · `clock` (absolute time) · `both` |
+| `VL_GIT_LINK` | `0` | `1` = OSC 8 hyperlink the git branch to its GitHub page (needs a terminal that passes OSC 8 through) |
+| `VL_CUSTOM_CMD` | _(empty)_ | shell command for the `custom` segment (first line of stdout is shown) |
+| `VL_CUSTOM_TIMEOUT` | `1` | seconds before the custom command is killed (when `timeout`/`gtimeout` is available) |
 | `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |
 | `VL_BG_*` / `VL_FG_*` | theme | colors — `256`-color index or `"R,G,B"` |
 
