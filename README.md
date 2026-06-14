@@ -48,7 +48,7 @@ config editing required.
 | `effort` | thinking effort level (`✲ high`), when set |
 | `cache` | prompt-cache hit rate (`↯`) from token counts already on stdin |
 | `vim` | vim mode (`⌨ NORMAL`), when vim mode is on |
-| `worktree` | linked-worktree badge (`⧉`) — Claude Code's `.worktree.*` if present, else git-detected (shows the parent repo); hidden in the main worktree |
+| `worktree` | location badge — `⬢ repo` in the main checkout, `⧉ repo ▸ suffix` in a linked worktree (strips the `repo--suffix` dir convention). Prefers Claude Code's `.worktree.*` when present; can stand in for `dir`. Hidden outside a repo |
 | `version` | Claude Code CLI version |
 | `session` | short session id (`#abcd1234`) |
 | `custom` | first line of `VL_CUSTOM_CMD`'s output |

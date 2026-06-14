@@ -531,17 +531,21 @@ seg_cache() {  # cache hit rate from token counts already on stdin
   push "$VL_BG_CACHE" "$(fg $cn) ↯ ${hit}% "
 }
 
-seg_worktree() {  # linked-worktree badge: prefers Claude Code's .worktree.*,
-                  # falls back to git (shows the parent repo it branches from)
-  local name=""
+seg_worktree() {  # location badge — repo in the main worktree, repo ▸ suffix in a
+                  # linked worktree. Prefers Claude Code's .worktree.* when present.
   if [ -n "$wt_name" ] && [ "$wt_name" != "null" ]; then
-    name="$wt_name"
-    [ -n "$wt_branch" ] && [ "$wt_branch" != "null" ] && name="${name} ⎇ ${wt_branch}"
-  elif [ -n "$GIT_WT" ]; then
-    name="$GIT_ROOT"                            # parent project of this linked worktree
+    local n="$wt_name"
+    [ -n "$wt_branch" ] && [ "$wt_branch" != "null" ] && n="${n} ⎇ ${wt_branch}"
+    push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⧉ $(trunc "$n" "$VL_NAME_MAX") "
+    return 0
   fi
-  [ -n "$name" ] || return 0
-  push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⧉ $(trunc "$name" "$VL_NAME_MAX") "
+  [ -n "$GIT_ROOT" ] || return 0                # not in a git repo → hidden
+  if [ -n "$GIT_WT" ]; then                     # linked worktree: repo ▸ suffix
+    local suffix="${GIT_WT#${GIT_ROOT}--}"      # strip the "<repo>--" naming convention
+    push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⧉ ${GIT_ROOT} ▸ $(trunc "$suffix" "$VL_NAME_MAX") "
+  else                                          # main worktree: just the repo
+    push "$VL_BG_WORKTREE" "$(fg $VL_FG_TEXT) ⬢ $(trunc "$GIT_ROOT" "$VL_NAME_MAX") "
+  fi
 }
 
 seg_version() {  # Claude Code CLI version (.version)
