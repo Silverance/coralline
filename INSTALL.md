@@ -91,6 +91,7 @@ lean:   ~/proj  ⎇ main  ◆ Fable 5  ⊙ 14:45     (no backgrounds, colored te
 | `style` | active output style | off |
 | `duration` | session wall-clock duration | off |
 | `stash` | git stash count | off |
+| `project` | stable repo name (`⬢`), same across all git worktrees | off |
 
 ### Question 4 · Layout
 
@@ -105,6 +106,11 @@ lean:   ~/proj  ⎇ main  ◆ Fable 5  ⊙ 14:45     (no backgrounds, colored te
 
 Ask about: clock format (`12h` / `24h` / `off`), and whether their terminal uses a
 **Nerd Font** (if not, set `VL_ASCII=1` so no broken glyphs appear).
+
+Also ask whether they work in **git worktrees**. If yes, suggest adding the `project`
+segment (a stable repo name that stays the same across worktrees) and setting `VL_NAME_MAX`
+(e.g. `14`) to truncate long branch names. If they don't use worktrees, skip both — `dir`
+already shows what they need.
 
 ## Step 2.5 — Powerlevel10k import (optional)
 
@@ -168,6 +174,7 @@ VL_CLOCK_SECONDS=1
 VL_BAR_WIDTH=5
 VL_COST_DECIMALS=2
 VL_PATH_DEPTH=4
+VL_NAME_MAX=0            # 0 = off; >0 truncates project/git names (middle-truncation)
 VL_ASCII=0               # 1 = no Nerd Font glyphs
 ```
 
