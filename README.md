@@ -4,6 +4,10 @@
 > Code with one installer entrypoint for humans and AI: run it directly, or ask Claude to run
 > it and handle the setup for you.
 
+> **Fork notice:** this is a fork of [Nanako0129/coralline](https://github.com/Nanako0129/coralline),
+> maintained by [@Silverance](https://github.com/Silverance) with additional segments and options
+> (see [Acknowledgements](#acknowledgements)).
+
 [繁體中文說明](./README.zh-TW.md)
 
 ![All six coralline themes rendered side by side](./assets/hero.png)
@@ -385,6 +389,11 @@ the pill shapes possible.
 As for the name: coralline algae build reefs one thin, colorful layer at a time —
 and **coral·line** is exactly what this is: a line, in Claude's coral.
 
+This repository is a fork of [coralline by Nanako0129](https://github.com/Nanako0129/coralline),
+maintained by [@Silverance](https://github.com/Silverance). It carries the upstream work forward
+and adds per-model limit gauges, the worktree location badge, and the `cache` / `vim` / `sha` /
+`conflicts` / `session` / `version` / `custom` segments, plus a few extra options.
+
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE) — © 2026 Nanako0129 (original author) and Jawed Lalee / Silverance (this fork).
