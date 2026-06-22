@@ -101,4 +101,12 @@ printf 'VL_STYLE="lean"\nVL_LAYOUT="fixed"\nVL_CLOCK="off"\nVL_SEGMENTS="sha"\n'
 shaout=$(CORALLINE_NO_SAMPLE=1 CORALLINE_CONFIG="$shaconf" bash "$SCRIPT" < "$gitinput" | sed $'s/\033\\[[0-9;]*m//g')
 hasE '@[0-9a-f]{7}' "$shaout" && check "sha: @<7-hex> from real repo" 1 || check "sha: @<7-hex> from real repo" 0
 
+# ── Group divider (sep segment) ──────────────────────────────────────────────
+# A `sep` between two segments renders the divider glyph and drops the lean
+# separator on both sides, so the row reads "a ┃ b", never "a · ┃ · b".
+out=$(render "model sep cost" 'VL_LEAN_SEP="·"')
+{ has '┃' "$out" && ! has '·' "$out"; } && check "sep: divider replaces the lean separators" 1 || check "sep: divider replaces the lean separators" 0
+out=$(render "model effort sep cost" 'VL_LEAN_SEP="·"')
+{ has '┃' "$out" && has '·' "$out"; } && check "sep: divider and normal separators coexist" 1 || check "sep: divider and normal separators coexist" 0
+
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "SOME FAILED"; exit 1; fi

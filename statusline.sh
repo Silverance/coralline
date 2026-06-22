@@ -34,6 +34,8 @@ fi
 # ── Defaults (every value can be overridden by the config file) ──────────────
 VL_STYLE="pill"                 # pill: powerline pills · lean: p10k-lean flat text
 VL_LEAN_SEP=""                  # lean only — extra text between segments, e.g. "·"
+VL_SEP_GLYPH="┃"                # `sep` segment: group-divider glyph (lean style)
+VL_SEP_FG=""                    # divider color; empty = bold default fg (heavier than VL_LEAN_SEP)
 VL_LAYOUT="fixed"               # fixed: one line per VL_SEGMENTS* var
                                 # auto:  single line, wraps when the window is narrow
 VL_MAX_LINES=3                  # auto only — wrap into at most this many lines
@@ -136,7 +138,7 @@ VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
 [ -f "$VL_CONF" ] && . "$VL_CONF"
 
 if [ "$VL_ASCII" = "1" ]; then
-  VL_CAP_L="" ; VL_CAP_R="" ; VL_SEP=""
+  VL_CAP_L="" ; VL_CAP_R="" ; VL_SEP="" ; VL_SEP_GLYPH="|"
   VL_BAR_FILL="#" ; VL_BAR_EMPTY="-"
 fi
 
@@ -947,6 +949,12 @@ seg_custom() {  # first line of $VL_CUSTOM_CMD's stdout
   push "$VL_BG_CUSTOM" "${_FG} ${out} "
 }
 
+seg_sep() {  # visual group divider (no data) — lean only. print_range drops the
+             # VL_LEAN_SEP on each side so it reads as one heavier rule, not "· ┃ ·".
+  [ "$VL_STYLE" = "lean" ] || return 0          # pill already separates via colored blocks
+  push "__SEP__" "${BOLD} ${VL_SEP_GLYPH} ${NORM}"
+}
+
 # ── Render ───────────────────────────────────────────────────────────────────
 build_segments() {
   local s
@@ -961,9 +969,16 @@ print_range() {  # render segments $1..$2 (inclusive) as one row
   if [ "$VL_STYLE" = "lean" ]; then
     out=""
     for ((i=$1; i<=$2; i++)); do
-      fg "${SEG_BGS[$i]}"
+      if [ "${SEG_BGS[$i]}" = "__SEP__" ]; then
+        fg "$VL_SEP_FG"                          # empty → default fg; the glyph carries the weight
+      else
+        fg "${SEG_BGS[$i]}"
+      fi
       out+="${R}${_FG}${SEG_TXT[$i]}"
-      [ "$i" -lt "$2" ] && out+="${R}${VL_LEAN_SEP}"
+      # lean separator after this segment — but never adjacent to a group divider
+      if [ "$i" -lt "$2" ] && [ "${SEG_BGS[$i]}" != "__SEP__" ] && [ "${SEG_BGS[$((i+1))]}" != "__SEP__" ]; then
+        out+="${R}${VL_LEAN_SEP}"
+      fi
     done
     printf '%s\n' "${out}${R}"
     return 0
