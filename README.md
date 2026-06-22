@@ -44,7 +44,7 @@
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
 
-The `sha`, `conflicts`, `cache`, `vim`, `worktree`, `version`, and `session` segments all read
+The `effort`, `sha`, `conflicts`, `cache`, `vim`, `worktree`, `version`, and `session` segments all read
 data Claude Code already pipes in (or that's already in the single `git status` call) — so they
 cost no extra subprocess, and hide themselves when their data isn't present.
 
