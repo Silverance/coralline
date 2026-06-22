@@ -567,9 +567,13 @@ GIT_SHA="" GIT_CONFLICTS=0 GIT_LINK="" GIT_WT=""
 # repo doesn't get re-scanned on every render. The cache file (keyed by cwd)
 # holds the write epoch on line 1 and the porcelain output below it.
 git_status_raw() {
-  local cache now content
+  local cache now content key
   if [ "${VL_GIT_CACHE:-0}" -gt 0 ] 2>/dev/null; then
-    cache="${TMPDIR:-/tmp}/coralline-git-${cwd//\//%}"
+    # Percent-encode % then / so the cache filename maps each cwd uniquely — a plain
+    # /->% swap collides (e.g. /a/25b and /a%b both became %a%25b), serving one repo's
+    # cached git state for another. Escape the escape char (%) first, then / -> %2F.
+    key="${cwd//\%/%25}"; key="${key//\//%2F}"
+    cache="${TMPDIR:-/tmp}/coralline-git-${key}"
     now=$(date +%s)
     if [ -f "$cache" ]; then
       content=$(<"$cache")
