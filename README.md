@@ -1,31 +1,17 @@
 # coralline
 
 > A [Powerlevel10k](https://github.com/romkatv/powerlevel10k)-inspired statusline for Claude
-> Code that **installs itself through your AI** — paste one prompt, answer a few questions
-> about colors and layout, done.
+> Code with one installer entrypoint for humans and AI: run it directly, or ask Claude to run
+> it and handle the setup for you.
 
 [繁體中文說明](./README.zh-TW.md)
 
 ![All six coralline themes rendered side by side](./assets/hero.png)
 
-## Install (the fun way)
-
-Paste this into Claude Code:
-
-```text
-Please install coralline for me:
-fetch https://raw.githubusercontent.com/Nanako0129/coralline/main/INSTALL.md
-and follow the playbook in it.
-```
-
-Claude will ask you to pick a theme (with previews), choose which segments you want, decide
-between a one-line or two-line layout, then wire everything up and verify it. No manual
-config editing required.
-
 ## What you get
 
 ```text
-╭ ~/side-project/coralline  ⎇ main+!  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  $1.23  ⊙ 02:45 pm ╮
+╭ ~/side-project/coralline  ⬢ coralline  ⎇ main+!  ◆ Fable 5  ψ high  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  7d ▰▰▰▰▱ 79% ↺1d11h  +321 −87  $1.23  ✎ Explanatory  ⧖ 47m  ⚑ 1  ⊙ 02:45 pm ╮
 ```
 
 | Segment | Shows |
@@ -34,18 +20,19 @@ config editing required.
 | `project` | repo name (`⬢`), stable across every worktree; hidden outside a git repo |
 | `git` | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
 | `model` | active Claude model |
+| `effort` | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` / `max` |
 | `ctx` | context-window gauge, input/output/cache token counts |
 | `limit5h` / `limit7d` | rate-limit gauges with reset countdown |
-| `limit7ds` / `limit7do` | per-model 7-day rate-limit gauges (Sonnet / Opus), when present |
-| `cost` | session cost in USD |
-| `clock` | time, 12h or 24h |
+| `burn` | range-to-empty: projected time until the binding limit (5h or 7d) hits 100% at the recent burn rate (`↗`); opt-in by adding `burn` to `VL_SEGMENTS` |
 | `lines` | lines added/removed this session |
+| `cost` | session cost in USD |
 | `style` | active output style |
 | `duration` | session wall-clock duration |
 | `stash` | git stash count |
+| `clock` | time, 12h or 24h |
+| `limit7ds` / `limit7do` | per-model 7-day rate-limit gauges (Sonnet / Opus), when present |
 | `sha` | short commit hash (`@2b97af9`) — free, from the same `git status` |
 | `conflicts` | unmerged-path count (`⚠`) — free, from the same `git status` |
-| `effort` | thinking effort level (`✲ high`), when set |
 | `cache` | prompt-cache hit rate (`↯`) from token counts already on stdin |
 | `vim` | vim mode (`⌨ NORMAL`), when vim mode is on |
 | `worktree` | location badge — `⬢ repo` in the main checkout, `⧉ repo ▸ suffix` in a linked worktree (strips the `repo--suffix` dir convention). Prefers Claude Code's `.worktree.*` when present; can stand in for `dir`. Hidden outside a repo |
@@ -55,26 +42,53 @@ config editing required.
 
 Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
 
-The `effort`, `cache`, `vim`, `worktree`, `version`, `session`, `sha`, and `conflicts` segments
-all read data Claude Code already pipes in (or that's already in the single `git status` call) —
-so they cost no extra subprocess, and hide themselves when their data isn't present.
+The `sha`, `conflicts`, `cache`, `vim`, `worktree`, `version`, and `session` segments all read
+data Claude Code already pipes in (or that's already in the single `git status` call) — so they
+cost no extra subprocess, and hide themselves when their data isn't present.
 
-## Why it's fast
+## Install
 
-The statusline is just a local shell script: it makes no network or API calls and uses zero
-tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
+Three ways to install, all driven by the same `install.sh`. Each one copies the renderer **and
+the setup wizard** into `~/.claude/coralline` and registers the status line in Claude Code, so
+you can re-run the wizard later no matter which way you installed.
 
-It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
-`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
-call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
-spam. Works on stock macOS bash 3.2 and any Linux bash.
+> **Requirements:** `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal. No Nerd Font?
+> Set `VL_ASCII=1` in your config for a glyph-free rendering.
 
-## Manual install
+### Ask Claude (recommended)
+
+Paste this into Claude Code:
+
+```text
+Please install coralline for me:
+fetch https://raw.githubusercontent.com/Silverance/coralline/main/INSTALL.md
+and follow the playbook in it.
+```
+
+Claude will read the playbook, use the same installer to bootstrap the runtime, interview you
+about the look, write the config, verify it, and remind you that you can rerun the visual
+wizard if the first result doesn't match your taste.
+
+### Install it yourself
+
+Run the installer in your terminal:
 
 ```bash
-git clone https://github.com/Nanako0129/coralline ~/.claude/coralline-src
+curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.sh | bash
+```
+
+When run interactively it asks which version to install — the latest tagged release
+(recommended) or `main` (latest development). To skip the prompt, pin one explicitly with
+`--ref`, e.g. `... | bash -s -- --ref v0.6.0` or `--ref main`.
+
+### Manual
+
+```bash
+git clone https://github.com/Silverance/coralline ~/.claude/coralline-src
 mkdir -p ~/.claude/coralline/themes
 cp ~/.claude/coralline-src/statusline.sh ~/.claude/coralline/
+cp ~/.claude/coralline-src/configure.sh ~/.claude/coralline/
+cp ~/.claude/coralline-src/install.sh ~/.claude/coralline/
 cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
 ```
 
@@ -90,8 +104,70 @@ Then add to `~/.claude/settings.json`:
 }
 ```
 
-> **Note:** requires `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal.
-> No Nerd Font? Set `VL_ASCII=1` in your config for a glyph-free rendering.
+> **Note:** the commands above copy only the `claude-coral` theme. The Ask-Claude and one-line
+> installers bundle every theme; after a manual install, copy the rest of
+> `~/.claude/coralline-src/themes/*.conf` into `~/.claude/coralline/themes/` to switch themes.
+
+### Updating
+
+Two ways to update, both driven by the same installer. Either way your
+`~/.claude/coralline.conf` is preserved and the previous `statusline.sh` is backed up
+under `~/.claude/coralline/` (the 3 newest are kept).
+
+#### Ask Claude (recommended)
+
+Paste this into Claude Code:
+
+```text
+Please update coralline for me:
+fetch https://raw.githubusercontent.com/Silverance/coralline/main/UPGRADE.md
+and follow the playbook in it.
+```
+
+Claude re-runs the installer, reads the "new since your installed copy" report, and
+offers to turn on any new opt-in features for you.
+
+#### Update it yourself
+
+Re-run the installer — it prints a short "new since your installed copy" report when
+something new shipped:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.sh | bash -s -- --install-only
+```
+
+## Setup
+
+Both paths use the same installer. Humans run it with no mode and get the visual setup. Claude
+uses it with `--install-only`, then follows `INSTALL.md` to interview you and write config.
+
+### Setup modes
+
+| Mode | Use when |
+|---|---|
+| Default | You want the coralline default immediately |
+| Powerlevel10k import | You already have `~/.p10k.zsh` and want to carry over its style, time format, and main colors |
+| Visual wizard | You want to preview themes, style, segments, wrapping, clock, and font compatibility before writing config |
+
+Running the installer yourself with no mode opens the interactive setup. Claude should not
+operate that TUI unless you explicitly ask for visual customization.
+
+### Reconfigure
+
+Every install path copies the wizard into `~/.claude/coralline`, so you can rerun it anytime to
+restyle:
+
+```bash
+bash ~/.claude/coralline/configure.sh
+```
+
+### Testing a fork
+
+Point the installer at the same fork:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
+```
 
 ### Verify your setup
 
@@ -144,6 +220,44 @@ Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the scrip
 | `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |
 | `VL_BG_*` / `VL_FG_*` | theme | colors — `256`-color index or `"R,G,B"` |
 
+### Burn-rate segment
+
+![The burn segment in a full statusline, and each of its states](./assets/burn-segment.png)
+
+Off by default. Add `burn` to `VL_SEGMENTS` to show a "range to empty" — the projected
+time until whichever rate limit (5h or 7d) binds first, e.g. `↗ 5h ⇢ 1h58m`. Keys:
+`CORALLINE_BURN_WINDOW` (recent-slope lookback, default 600s), `VL_BURN_GLYPH` (default
+`↗`), `VL_BG_BURN` (defaults to the 5h background). While `burn` is in the segment list,
+coralline writes samples to `~/.claude/coralline/burn-5h.tsv`; drop it from the list and
+nothing is written.
+
+The ETA is coloured by urgency against the window reset, and collapses to a glyph when a
+number would be noise:
+
+| You see | When |
+|---|---|
+| `↗ 5h ⇢ 1h58m` **red** | you'd empty *before* the window resets |
+| `↗ 5h ⇢ 1h58m` **yellow** | reset and empty are a close call |
+| `↗ 5h ⇢ 1h58m` **green** | the window resets with room to spare |
+| **bright** `↗ ✓` | at this pace a full window can't run dry — a number like `24d15h` would just be noise |
+| **dim** `↗ ✓` | idle: you've stopped burning, nothing in flight |
+| **dim** `↗ …` | warming up: a cold start with no samples yet (deliberately *not* a green check, so a fresh install doesn't read as healthy) |
+
+The label tells you which limit binds — whichever of `5h`/`7d` will hit 100% soonest.
+`5h` only appears once you're burning hard enough to register at least two integer-%
+steps within the recent window; at a light or steady pace there's no short-term slope to
+fit, so the 7d projection binds and you see `↗ 7d`.
+
+### Cross-session limit sync (optional)
+
+`VL_LIMIT_SYNC=1` makes `limit5h` / `limit7d` show the freshest rate-limit reading any of your sessions has seen, instead of just this session's own snapshot. Each render records its `5h` / `7d` value to a small per-host store (`limit-5h.d` / `limit-7d.d`), and the segments display the highest percentage recorded for the current window. Off by default.
+
+This exists because Claude Code re-renders a session's statusline only when that session is active, and the rate-limit numbers it passes are that session's last-seen values. So idle sessions show stale, divergent percentages. With sync on, every session converges to the latest known value the next time it redraws.
+
+> **It only updates on redraw.** It cannot refresh a session that is not redrawing at all, and "latest known" is only as fresh as your most recently active session. coralline has no API access. So this narrows the gap between sessions, it does not make a fully idle bar live.
+
+Single-session users gain nothing from it (there is only one snapshot), so it stays opt-in.
+
 ### Responsive layout
 
 With `VL_LAYOUT="auto"` the bar stays on a single line while it fits, and greedily wraps into
@@ -179,9 +293,39 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 | `VL_LEAN_SEP` | _(empty)_ | extra text between segments, e.g. `·` |
 | `VL_LEAN_FG` | _(empty)_ | force a text color; empty = inherit each segment's accent |
 
-> **Tip:** already a p10k user? Tell the AI installer to import your `~/.p10k.zsh` — it will
-> carry over your style, colors, and time format. See the
-> [Powerlevel10k import step in INSTALL.md](./INSTALL.md#step-25--powerlevel10k-import-optional).
+> **Tip:** already a p10k user? Tell the AI installer or the visual wizard to import your
+> `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
+> See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
+
+## Float readout (optional)
+
+`VL_FLOAT=1` makes `statusline.sh` write a one-line **plain-text** readout to
+`~/.claude/coralline/float.txt` on every render (segments from
+`VL_FLOAT_SEGMENTS`, default `model ctx cost`). That's all coralline does —
+it ships **no display carrier**. The file is the seam: pipe it wherever you want
+a glanceable readout that stays visible without looking at Claude Code's bottom
+statusline (a terminal status bar, tmux, a menu-bar app, …).
+
+The readout is **plain text** (no ANSI color), so the default favors stable,
+glance-friendly segments and leaves the color-driven limit warnings
+(`limit5h` / `limit7d`) in the bottom statusline, where threshold colors work.
+You can still add them to `VL_FLOAT_SEGMENTS` if you want the numbers up top.
+
+**Config keys**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `VL_FLOAT` | `0` | `1` = write `float.txt` each render |
+| `VL_FLOAT_SEGMENTS` | `model ctx cost` | segments rendered into the readout (plain text, no color) |
+| `VL_FLOAT_SEP` | `  ·  ` | separator between segments |
+| `VL_FLOAT_FILE` | `~/.claude/coralline/float.txt` | where the readout is written |
+
+(Or toggle `VL_FLOAT` via "float readout" in `configure.sh`'s Details menu.)
+
+A worked iTerm2 carrier (the `coralline-float` companion + setup steps) lives in
+[`example/float-display-iterm2/`](example/float-display-iterm2/) — copy it into
+your dotfiles and adapt. Other terminals (tmux, WezTerm, a menu-bar app, …) just
+need to read `float.txt` the same way.
 
 ## Themes
 
@@ -190,14 +334,43 @@ Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
 | **`claude-coral`** — steel blue · mauve · Claude coral (default)<br>![claude-coral theme preview](./assets/theme-claude-coral.png) | **`catppuccin-mocha`** — soft pastels on dark<br>![catppuccin-mocha theme preview](./assets/theme-catppuccin-mocha.png) |
 | **`nord`** — arctic frost<br>![nord theme preview](./assets/theme-nord.png) | **`gruvbox-dark`** — warm retro<br>![gruvbox-dark theme preview](./assets/theme-gruvbox-dark.png) |
 | **`tokyo-night`** — neon on deep navy<br>![tokyo-night theme preview](./assets/theme-tokyo-night.png) | **`mono`** — grayscale minimalism<br>![mono theme preview](./assets/theme-mono.png) |
-| **`warp`** — tuned to Warp's default dark theme<br>![warp theme preview](./assets/theme-warp.png) | |
+| **`dracula`** — cyan · pink · purple on charcoal<br>![dracula theme preview](./assets/theme-dracula.png) | **`lunar-pink`** — pink · cyan · yellow on near-black<br>![lunar-pink theme preview](./assets/theme-lunar-pink.png) |
+| **`reverie`** — soft pastels · plum text on warm-dark<br>![reverie theme preview](./assets/theme-reverie.png) | **`warp`** — tuned to Warp's default dark theme<br>![warp theme preview](./assets/theme-warp.png) |
 
 A theme is just a `.conf` file assigning `VL_BG_*` / `VL_FG_*` — copy one, change the colors,
 and source yours from `coralline.conf` instead. PRs with new themes are welcome.
+The wizard discovers themes automatically from `themes/*.conf` and nested collections such as
+`themes/best-themes/*.conf`, so adding a theme file does not require editing `configure.sh`.
 
-> **Tip:** the preview images are generated from the real script by
-> [`tools/render-screenshots.py`](./tools/render-screenshots.py) — after adding a theme, add it
-> to the `THEMES` list there and re-run it to get a matching preview.
+> **Adding a theme?** Copy an existing `.conf`, set every `VL_BG_*` / `VL_FG_*`
+> (including `VL_BG_EFFORT`), add its name to the `THEMES` list in
+> [`tools/render-screenshots.py`](./tools/render-screenshots.py), re-run it to generate
+> `assets/theme-<name>.png`, and add a row to the table above. Please **don't regenerate
+> `hero.png`** — it's a fixed sampler of the original six themes, not a full catalog.
+
+## Platform support
+
+| Platform | Status |
+|---|---|
+| macOS | ✅ supported (works on the stock bash 3.2) |
+| Linux | ✅ supported |
+| Windows + Git Bash | ✅ supported — Claude Code runs the status line through Git Bash when it's installed |
+| Windows without Git Bash | ❌ not yet — Claude Code falls back to PowerShell, which can't run the bash script ([roadmap](https://github.com/Silverance/coralline/issues)) |
+
+> **Windows note:** install [Git for Windows](https://git-scm.com/download/win) (which bundles
+> Git Bash) and `jq`, and coralline runs natively. A native PowerShell port for the no-Git-Bash
+> case is on the roadmap. The render path is built to stay cheap under Git Bash's emulated
+> `fork()` — one `jq`, one `git`, and no per-field subprocess spawning.
+
+## Why it's fast
+
+The statusline is just a local shell script: it makes no network or API calls and uses zero
+tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
+
+It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
+`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
+call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
+spam. Works on stock macOS bash 3.2 and any Linux bash.
 
 ## Acknowledgements
 
