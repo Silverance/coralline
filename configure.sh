@@ -146,6 +146,24 @@ load_segment_choices() {
   SEGMENT_CHOICES="$ordered"
 }
 
+# Space-separated, sorted-unique segment names in a statusline file. Mirrors
+# load_segment_choices' discovery so detection and the wizard agree on "segment".
+segment_names() {  # $1=statusline file
+  grep -oE '^seg_[A-Za-z0-9_]+' "$1" 2>/dev/null \
+    | sed 's/^seg_//' | grep -Ev '^(len|limit)$' | sort -u | tr '\n' ' '
+}
+
+# Space-separated, sorted-unique opt-in knob names: VL_/CORALLINE_ assignments
+# whose shipped default is exactly 0 and whose line is not tagged "internal".
+# This excludes color knobs (non-0 defaults like "r,g,b") and internal vars,
+# which would otherwise flood the upgrade report. A numeric 0-default knob can
+# slip through, but such knobs pre-exist and so never appear as "new".
+knob_names() {  # $1=statusline file
+  grep -E '^(VL_|CORALLINE_)[A-Za-z0-9_]+=0([[:space:]]|$)' "$1" 2>/dev/null \
+    | grep -iv 'internal' \
+    | sed -E 's/=0.*$//' | sort -u | tr '\n' ' '
+}
+
 segment_total() {
   set -- $SEGMENT_CHOICES
   printf '%s\n' "$#"
