@@ -8,8 +8,6 @@
 > maintained by [@Silverance](https://github.com/Silverance) with additional segments and options
 > (see [Acknowledgements](#acknowledgements)).
 
-[繁體中文說明](./README.zh-TW.md)
-
 ![All six coralline themes rendered side by side](./assets/hero.png)
 
 ## What you get
