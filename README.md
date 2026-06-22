@@ -19,7 +19,7 @@
 | Segment | Shows |
 |---|---|
 | `dir` | current directory, long paths collapsed to `~/a/…/z` |
-| `project` | repo name (`⬢`), stable across every worktree; hidden outside a git repo |
+| `project` | repo name (`⬢`), stable across every worktree; falls back to `dir` outside a git repo (hidden only when `dir` is already shown) |
 | `git` | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
 | `model` | active Claude model |
 | `effort` | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` / `max` |
