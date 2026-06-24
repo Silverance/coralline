@@ -23,7 +23,9 @@ if [ "${VL_DOCTOR:-0}" = "1" ]; then
   # Synthetic session so --doctor renders a preview outside Claude Code.
   input='{"workspace":{"current_dir":"'"$PWD"'"},"model":{"display_name":"Claude Fable 5"},"version":"2.1.160","session_id":"abcd1234-5678-90ef","effort":{"level":"high"},"vim":{"mode":"NORMAL"},"worktree":{"name":"demo-wt","branch":"feat/demo"},"output_style":{"name":"Explanatory"},"context_window":{"used_percentage":62,"total_input_tokens":1234567,"total_output_tokens":45678,"current_usage":{"cache_read_input_tokens":98765,"cache_creation_input_tokens":4321}},"rate_limits":{"five_hour":{"used_percentage":41},"seven_day":{"used_percentage":79},"seven_day_sonnet":{"used_percentage":55},"seven_day_opus":{"used_percentage":88}},"cost":{"total_cost_usd":1.23,"total_lines_added":321,"total_lines_removed":87,"total_duration_ms":5432100}}'
 else
-  input=$(cat)
+  # -d '' reads until NUL (i.e. all of stdin, like cat) without forking.
+  # -t 5 prevents zombie bash on MSYS2 where pipe EOF may never arrive.
+  read -t 5 -r -d '' input || true
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
