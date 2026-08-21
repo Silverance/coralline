@@ -190,6 +190,13 @@ narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
 A theme is a `.conf` file assigning `VL_BG_*` and `VL_FG_*`; the wizard discovers `.conf` files
 recursively under [`themes/`](./themes/).
 
+Each segment draws with a fixed foreground knob, so a pill set to that same colour renders
+nothing at all. Every bundled theme therefore carries contrast-checked values for the segments
+this fork adds, on two tiers: 4.5:1 for the ones that carry signal you must read
+(`worktree`, `vim`, `custom`, `conflicts`, `cache`) and 3:1 for the deliberately recessed
+metadata drawn in `VL_FG_DIM` (`sha`, `version`, `session`). `test/test-contrast.sh` holds
+every theme to those tiers.
+
 | | |
 |---|---|
 | **`claude-coral`** — steel blue · mauve · Claude coral (default)<br>![claude-coral theme preview](./assets/theme-claude-coral.png) | **`catppuccin-mocha`** — soft pastels on dark<br>![catppuccin-mocha theme preview](./assets/theme-catppuccin-mocha.png) |

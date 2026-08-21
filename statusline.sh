@@ -175,14 +175,19 @@ VL_BG_DURATION=60
 VL_BG_EFFORT=141
 # New segments fall back to these if a theme doesn't set them (themes only need
 # to override what they want to recolor).
-VL_BG_VIM=240
-VL_BG_CACHE=238
-VL_BG_WORKTREE=66
-VL_BG_VERSION=238
-VL_BG_SESSION=238
-VL_BG_SHA=240
-VL_BG_CONFLICT=160
-VL_BG_CUSTOM=240
+# Fallback pills for this fork's segments, for a custom theme that does not
+# override them. The shipped VL_FG_TEXT is near-white and VL_FG_DIM is a mid
+# grey, so these have to be dark to stay legible; every bundled theme replaces
+# them with palette-native values. Ratios are worst-case against the ink each
+# segment actually draws with.
+VL_BG_VIM=58            # 6.72:1 vs VL_FG_TEXT — dark olive, editor mode
+VL_BG_CACHE=234         # 4.62:1 vs the worst gauge ink — text is value-coloured
+VL_BG_WORKTREE=23       # 7.49:1 vs VL_FG_TEXT — dark teal, location badge
+VL_BG_VERSION=53        # 3.68:1 vs VL_FG_DIM — dim metadata, violet
+VL_BG_SESSION=236       # 3.82:1 vs VL_FG_DIM — dim metadata, neutral
+VL_BG_SHA=17            # 5.22:1 vs VL_FG_DIM — dim metadata, blue
+VL_BG_CONFLICT=160      # 5.40:1 vs VL_FG_TEXT — error, stays loud
+VL_BG_CUSTOM=54         # 11.44:1 vs VL_FG_TEXT — dark violet, user output
 VL_BG_NODE=""                   # optional; falls back to VL_BG_MODEL when empty
 VL_BG_PYTHON=""                 # optional; falls back to VL_BG_MODEL when empty
 VL_BG_BAR=""                   # classic style only — the uniform bar behind the whole
