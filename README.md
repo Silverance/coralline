@@ -260,6 +260,8 @@ This exists because Claude Code re-renders a session's statusline only when that
 
 Single-session users gain nothing from it (there is only one snapshot), so it stays opt-in.
 
+The store, the burn samples, and the float file all hang off one base: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/coralline`. Setting `CLAUDE_CONFIG_DIR` therefore keeps two Claude Code config directories on one host from sharing (and overwriting) each other's 5h/7d windows and burn history. The `CORALLINE_RL5H_FILE`, `CORALLINE_RL7D_FILE` and `CORALLINE_BURN_FILE` overrides still take precedence. Note that `coralline.conf` itself deliberately stays at `$HOME/.claude/coralline.conf`, so one palette and segment configuration is shared while limit and burn state stay per-directory.
+
 ### Responsive layout
 
 With `VL_LAYOUT="auto"` the bar stays on a single line while it fits, and greedily wraps into

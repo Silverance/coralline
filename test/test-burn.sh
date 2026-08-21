@@ -361,4 +361,51 @@ else
   ok "gate integration (skipped: no jq)"
 fi
 
+# Default store base follows CLAUDE_CONFIG_DIR (two Claude config dirs must not
+# share one 5h/7d store). Asserted on where a real render actually puts the files,
+# with no CORALLINE_*_FILE override in play, so a relocated default cannot pass by
+# matching source text.
+if command -v jq >/dev/null 2>&1; then
+  store_run() {  # $1=case dir, $2=CLAUDE_CONFIG_DIR value ("" = leave unset)
+    local case_dir="$1" cfg_dir="$2" soon
+    rm -rf "$case_dir"; mkdir -p "$case_dir/home"
+    printf '%s\n' 'VL_SEGMENTS="limit5h limit7d"' 'VL_LIMIT_SYNC=1' \
+      'VL_CLOCK=off' 'VL_STYLE=lean' 'VL_NOCOLOR=1' > "$case_dir/conf"
+    soon=$(( $(date +%s) + 10800 ))
+    jq --arg r "$soon" \
+       '.rate_limits.five_hour.resets_at=$r | .rate_limits.seven_day.resets_at=$r' \
+       "$HERE/sample-input.json" > "$case_dir/input"
+    # env -u clears any CORALLINE_*_FILE inherited from the caller's shell, which
+    # would otherwise redirect the store and make both cases pass vacuously.
+    if [ -n "$cfg_dir" ]; then
+      env -u CORALLINE_RL5H_FILE -u CORALLINE_RL7D_FILE -u CORALLINE_BURN_FILE \
+        HOME="$case_dir/home" CLAUDE_CONFIG_DIR="$cfg_dir" CORALLINE_CONFIG="$case_dir/conf" \
+        bash "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err"
+    else
+      env -u CORALLINE_RL5H_FILE -u CORALLINE_RL7D_FILE -u CORALLINE_BURN_FILE \
+        -u CLAUDE_CONFIG_DIR \
+        HOME="$case_dir/home" CORALLINE_CONFIG="$case_dir/conf" \
+        bash "$SCRIPT" < "$case_dir/input" > "$case_dir/out" 2> "$case_dir/err"
+    fi
+  }
+  CASE="$TMPD/store-base"
+
+  store_run "$CASE/redirected" "$CASE/redirected/alt"
+  [ -e "$CASE/redirected/alt/coralline/limit-5h.d" ] \
+    && ok "CLAUDE_CONFIG_DIR redirects the default store" \
+    || bad "CLAUDE_CONFIG_DIR redirects the default store" "limit-5h.d absent under alt"
+  [ ! -e "$CASE/redirected/home/.claude/coralline" ] \
+    && ok "redirected store leaves the HOME store untouched" \
+    || bad "redirected store leaves the HOME store untouched" "HOME store was created"
+  eq "redirected render stderr empty" "$(wc -c < "$CASE/redirected/err" | tr -d ' ')" "0"
+
+  store_run "$CASE/plain" ""
+  [ -e "$CASE/plain/home/.claude/coralline/limit-5h.d" ] \
+    && ok "unset CLAUDE_CONFIG_DIR keeps the historical HOME store" \
+    || bad "unset CLAUDE_CONFIG_DIR keeps the historical HOME store" "HOME store absent"
+  eq "plain render stderr empty" "$(wc -c < "$CASE/plain/err" | tr -d ' ')" "0"
+else
+  ok "default store base (skipped: no jq)"
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }
