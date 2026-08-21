@@ -1,48 +1,58 @@
 # coralline
 
-> A [Powerlevel10k](https://github.com/romkatv/powerlevel10k)-inspired statusline for Claude
-> Code with one installer entrypoint for humans and AI: run it directly, or ask Claude to run
-> it and handle the setup for you.
+> A [Powerlevel10k](https://github.com/romkatv/powerlevel10k)-inspired statusline for Claude Code, with native Bash and Windows PowerShell renderers.
 
 > **Fork notice:** this is a fork of [Nanako0129/coralline](https://github.com/Nanako0129/coralline),
 > maintained by [@Silverance](https://github.com/Silverance) with additional segments and options
 > (see [Acknowledgements](#acknowledgements)).
 
-![All six coralline themes rendered side by side](./assets/hero.png)
+![The original six coralline themes rendered side by side](./assets/hero.png)
 
 ## What you get
 
+This is the runtime default rendered from the bundled sample in a clean `main` worktree:
+
 ```text
-╭ ~/side-project/coralline  ⬢ coralline  ⎇ main+!  ◆ Fable 5  ψ high  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k  5h ▰▰▱▱▱ 41% ↺2h44m  7d ▰▰▰▰▱ 79% ↺1d11h  +321 −87  $1.23  ✎ Explanatory  ⧖ 47m  ⚑ 1  ⊙ 02:45 pm ╮
+ ~/side-project/coralline  ⎇ main  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62% ↑1.2M ↓45.6k cr:98.7k cw:4.3k  5h ▰▰▱▱▱ 41% ↺2h44m  7d ▰▰▰▰▱ 79% ↺1d11h  $1.23  ⊙ 01:37:35 pm 
 ```
 
-| Segment | Shows |
-|---|---|
-| `dir` | current directory, long paths collapsed to `~/a/…/z` |
-| `project` | repo name (`⬢`), stable across every worktree; falls back to `dir` outside a git repo (hidden only when `dir` is already shown) |
-| `git` | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
-| `model` | active Claude model |
-| `effort` | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` / `max` |
-| `ctx` | context-window gauge, input/output/cache token counts |
-| `limit5h` / `limit7d` | rate-limit gauges with reset countdown |
-| `burn` | range-to-empty: projected time until the binding limit (5h or 7d) hits 100% at the recent burn rate (`↗`); opt-in by adding `burn` to `VL_SEGMENTS` |
-| `lines` | lines added/removed this session |
-| `cost` | session cost in USD |
-| `style` | active output style |
-| `duration` | session wall-clock duration |
-| `stash` | git stash count |
-| `clock` | time, 12h or 24h |
-| `limit7ds` / `limit7do` | per-model 7-day rate-limit gauges (Sonnet / Opus), when present |
-| `sha` | short commit hash (`@2b97af9`) — free, from the same `git status` |
-| `conflicts` | unmerged-path count (`⚠`) — free, from the same `git status` |
-| `cache` | prompt-cache hit rate (`↯`) from token counts already on stdin |
-| `vim` | vim mode (`⌨ NORMAL`), when vim mode is on |
-| `worktree` | location badge — `⬢ repo` in the main checkout, `⧉ repo ▸ suffix` in a linked worktree (strips the `repo--suffix` dir convention). Prefers Claude Code's `.worktree.*` when present; can stand in for `dir`. Hidden outside a repo |
-| `version` | Claude Code CLI version |
-| `session` | short session id (`#abcd1234`) |
-| `custom` | first line of `VL_CUSTOM_CMD`'s output |
+| Segment | Default | Shows |
+|---|---|---|
+| `dir` | yes | current directory, long paths collapsed to `~/a/…/z` |
+| `project` | no | repo name (`⬢`), stable across every worktree; falls back to `dir` outside a git repo (hidden only when `dir` is already shown) |
+| `git` | yes | branch, staged `+` / modified `!` / untracked `?`, ahead `⇡` behind `⇣` |
+| `node` | no | active Node version from a pin file, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
+| `python` | no | active virtualenv, conda, or pinned Python version, or `PATH` with `VL_RUNTIME_PROBE=1`; hidden when undetected |
+| `model` | yes | active Claude model |
+| `effort` | no | reasoning effort level (`ψ`) — `low` / `med` / `high` / `xhigh` / `max` |
+| `ctx` | yes | context-window gauge, input/output/cache token counts (detail level via `VL_CTX_TOKENS`) |
+| `limit5h` | yes | five-hour rate-limit gauge with reset countdown |
+| `limit7d` | yes | seven-day rate-limit gauge with reset countdown |
+| `burn` | no | range-to-empty: projected time until the binding limit (5h or 7d) hits 100% at the recent burn rate (`↗`) |
+| `lines` | no | lines added/removed this session |
+| `cost` | yes | session cost in USD |
+| `style` | no | active output style |
+| `duration` | no | session wall-clock duration |
+| `stash` | no | git stash count |
+| `clock` | yes | time, 12h or 24h |
 
-Gauges change color as they fill: green → yellow at 50% → red at 75% (thresholds configurable).
+Segments added by this fork (see [Acknowledgements](#acknowledgements)):
+
+| Segment | Default | Shows |
+|---|---|---|
+| `limit7ds` / `limit7do` | no | per-model 7-day rate-limit gauges (Sonnet / Opus), when present |
+| `sha` | no | short commit hash (`@2b97af9`) — free, from the same `git status` |
+| `conflicts` | no | unmerged-path count (`⚠`) — free, from the same `git status` |
+| `cache` | no | prompt-cache hit rate (`↯`) from token counts already on stdin |
+| `vim` | no | vim mode (`⌨ NORMAL`), when vim mode is on |
+| `worktree` | no | location badge — `⬢ repo` in the main checkout, `⧉ repo ▸ suffix` in a linked worktree (strips the `repo--suffix` dir convention). Prefers Claude Code's `.worktree.*` when present; can stand in for `dir`. Hidden outside a repo |
+| `version` | no | Claude Code CLI version |
+| `session` | no | short session id (`#abcd1234`) |
+| `custom` | no | first line of `VL_CUSTOM_CMD`'s output |
+| `sep` | no | visual group divider (`┃`), lean style only — no data |
+
+
+Gauges change from green to yellow at 50% and red at 75%; both thresholds are configurable.
 
 The `effort`, `sha`, `conflicts`, `cache`, `vim`, `worktree`, `version`, and `session` segments all read
 data Claude Code already pipes in (or that's already in the single `git status` call) — so they
@@ -50,14 +60,9 @@ cost no extra subprocess, and hide themselves when their data isn't present.
 
 ## Install
 
-Three ways to install, all driven by the same `install.sh`. Each one copies the renderer **and
-the setup wizard** into `~/.claude/coralline` and registers the status line in Claude Code, so
-you can re-run the wizard later no matter which way you installed.
+Bash environments on macOS, Linux, and Windows use `install.sh`. Windows without Git Bash or WSL uses the native Windows PowerShell 5.1 path below. Bash requires `jq` and a [Nerd Font](https://www.nerdfonts.com/); set `VL_ASCII=1` for a glyph-free rendering. Git is optional and only enables git-backed segments.
 
-> **Requirements:** `jq` and a [Nerd Font](https://www.nerdfonts.com/) terminal. No Nerd Font?
-> Set `VL_ASCII=1` in your config for a glyph-free rendering.
-
-### Ask Claude (recommended)
+### Ask Claude
 
 Paste this into Claude Code:
 
@@ -67,109 +72,139 @@ fetch https://raw.githubusercontent.com/Silverance/coralline/main/INSTALL.md
 and follow the playbook in it.
 ```
 
-Claude will read the playbook, use the same installer to bootstrap the runtime, interview you
-about the look, write the config, verify it, and remind you that you can rerun the visual
-wizard if the first result doesn't match your taste.
+Claude routes by environment, asks before changing preferences, and uses the appropriate installer. This fetches a mutable `main/INSTALL.md`; review it first or pin the playbook, installer, and payload to the same audited commit as described under [Trust and security](#trust-and-security).
 
-### Install it yourself
+### Bash
 
-Run the installer in your terminal:
+Run the interactive installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.sh | bash
 ```
 
-When run interactively it asks which version to install — the latest tagged release
-(recommended) or `main` (latest development). To skip the prompt, pin one explicitly with
-`--ref`, e.g. `... | bash -s -- --ref v0.6.0` or `--ref main`.
+It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.13.0` or another ref. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
 
-### Manual
+### Windows without Git Bash
+
+`statusline.ps1` is the native Windows PowerShell 5.1 renderer. It needs no Bash, `jq`, WSL, archive extractor, or Git; `git.exe` is optional and only enables `git`, `stash`, and `project`. It supports the same main segments, styles, layouts, state-backed features, float output, and themed subagent rows as Bash.
+
+The following bootstrap follows mutable `main`, resolves it to a commit before downloading executable installer code, then passes the same commit to `install.ps1`:
+
+```powershell
+& { $ErrorActionPreference='Stop';$repo='Silverance/coralline';$ref='main';$subagentRows="preserve";if($subagentRows -cnotin @("preserve","on","off")){throw "invalid SubagentRows"};if($repo -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$' -or $ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $ref.Length -gt 200 -or $ref.Contains('..') -or $ref.Contains('//') -or $ref.Contains('@{') -or $ref.EndsWith('/') -or $ref.EndsWith('.') -or $ref -match '(?i)(^|/)[^/]*\.lock($|/)'){throw 'invalid Repo or Ref'};$safe={param([string]$p,[string]$label,[bool]$cmd=$false);if([string]::IsNullOrWhiteSpace($p) -or $p -match '[\x00-\x1f\x7f-\x9f]' -or $p.StartsWith('\\') -or $p.StartsWith('//') -or $p.IndexOf(':',2) -ge 0){throw "$label is not a safe local path"};$full=[IO.Path]::GetFullPath($p).Replace('/','\');$root=[IO.Path]::GetPathRoot($full);if($root -notmatch '^[A-Za-z]:\\$'){throw "$label is not on a local drive"};$drive=New-Object IO.DriveInfo($root);if($drive.DriveType -eq [IO.DriveType]::Network){throw "$label is on a network drive"};if($cmd -and ($full.Contains('"') -or $full.Contains('%') -or $full.Contains('!'))){throw "$label is not cmd-safe"};$current=$root;foreach($part in $full.Substring($root.Length).Split(@([char]'\'),[StringSplitOptions]::RemoveEmptyEntries)){$current=[IO.Path]::Combine($current,$part);$item=Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue;if($null -eq $item){break};if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw "$label contains a reparse point"}};if($full.Length -gt $root.Length){$full=$full.TrimEnd('\')};return $full};$fetch={param([uri]$uri,[long]$cap,[string]$label);if($uri.Scheme -cne 'https' -or ($uri.Host -cne 'api.github.com' -and $uri.Host -cne 'raw.githubusercontent.com') -or $uri.UserInfo -or $uri.Query -or $uri.Fragment){throw "unexpected $label URI"};$request=[Net.HttpWebRequest]::Create($uri);$request.Method='GET';$request.AllowAutoRedirect=$false;$request.Timeout=15000;$request.ReadWriteTimeout=15000;$request.UserAgent='coralline-bootstrap';$response=$null;try{$response=[Net.HttpWebResponse]$request.GetResponse();if($response.StatusCode -ne [Net.HttpStatusCode]::OK -or $response.ResponseUri.AbsoluteUri -cne $uri.AbsoluteUri){throw "$label request failed or redirected"};if($response.ContentLength -gt $cap){throw "$label Content-Length exceeds limit"};$input=$response.GetResponseStream();$memory=New-Object IO.MemoryStream;try{$buffer=New-Object byte[] 8192;$total=0L;while(($read=$input.Read($buffer,0,$buffer.Length)) -gt 0){$total+=$read;if($total -gt $cap){throw "$label stream exceeds limit"};$memory.Write($buffer,0,$read)};if($response.ContentLength -ge 0 -and $total -ne $response.ContentLength){throw "$label download was truncated"};return ,$memory.ToArray()}finally{if($null -ne $input){$input.Dispose()};$memory.Dispose()}}finally{if($null -ne $response){$response.Dispose()}}};$old=[Net.ServicePointManager]::SecurityProtocol;$tmp=$null;$made=$false;$code=0;try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$parts=$repo.Split('/');$commit=$ref;if($commit -cnotmatch '^[0-9a-f]{40}$'){$api=[uri]('https://api.github.com/repos/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/commits/'+[uri]::EscapeDataString($ref));$strict=New-Object Text.UTF8Encoding($false,$true);try{$payload=$strict.GetString((& $fetch $api 1MB 'commit resolution'))|ConvertFrom-Json}catch{throw ('commit resolution response is invalid: '+$_.Exception.Message)};if($null -eq $payload -or $payload.PSObject.Properties.Name -notcontains 'sha'){throw 'commit resolution response has no sha'};$commit=[string]$payload.sha;if($commit -cnotmatch '^[0-9a-f]{40}$'){throw 'commit resolution returned an invalid sha'}};$uri=[uri]('https://raw.githubusercontent.com/'+[uri]::EscapeDataString($parts[0])+'/'+[uri]::EscapeDataString($parts[1])+'/'+$commit+'/install.ps1');$bytes=& $fetch $uri 1MB 'installer';$tempRoot=& $safe ([IO.Path]::GetTempPath()) 'TEMP';$tmp=& $safe ([IO.Path]::Combine($tempRoot,('coralline-install-'+[guid]::NewGuid().ToString('N')+'.ps1'))) 'installer temp';$output=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$made=$true;try{$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()};$checked=& $safe $tmp 'downloaded installer';if($checked -cne $tmp){throw 'installer temp identity changed'};$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($tmp,[ref]$tokens,[ref]$errors);if($errors.Count -ne 0){throw ('downloaded installer parse failed: '+$errors[0].Message)};$exe=& $safe ([IO.Path]::Combine($PSHOME,'powershell.exe')) 'PowerShell executable' $true;if(-not [IO.File]::Exists($exe)){throw 'trusted powershell.exe is missing'};$psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$exe;$psi.UseShellExecute=$false;$psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$tmp+'" -Repo "'+$repo+'" -Ref "'+$commit+'"';$psi.Arguments+=" -SubagentRows "+[char]34+$subagentRows+[char]34;$process=New-Object Diagnostics.Process;$process.StartInfo=$psi;try{if(-not $process.Start()){throw 'installer child did not start'};$process.WaitForExit();$code=$process.ExitCode}finally{$process.Dispose()}}finally{[Net.ServicePointManager]::SecurityProtocol=$old;if($made -and $null -ne $tmp -and [IO.File]::Exists($tmp)){$checked=& $safe $tmp 'installer cleanup';if($checked -cne $tmp){throw 'refusing unexpected cleanup path'};$item=Get-Item -LiteralPath $tmp -Force;if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'refusing reparse-point cleanup'};[IO.File]::Delete($tmp)}};if($code -ne 0){exit $code} }
+```
+
+For an audited release or commit, copy the line and replace only `$ref='main'` with the selected tag or 40-character SHA. A branch or tag can move; the bootstrap resolves it before downloading. The native installer manages `statusline.ps1` and the ten shipped themes, precisely merges the top-level `statusLine`, preserves `subagentStatusLine` unless `on` or `off` is explicit, never creates or edits `coralline.conf`, and leaves custom themes, state, and float output outside its replacement set. See the current [`INSTALL.md`](./INSTALL.md) contract and the historical [native installer PR #55](https://github.com/Nanako0129/coralline/pull/55).
+
+### Trust and security
+
+The default `main/INSTALL.md`, `main/UPGRADE.md`, and `main/install.sh` URLs are mutable remote inputs. Read the selected [`INSTALL.md`](./INSTALL.md), [`install.sh`](./install.sh), and [`install.ps1`](./install.ps1) before running them.
+
+Passing `--ref <SHA>` to an installer already downloaded from `main` pins only the files it downloads next. To pin the initial Bash installer and its payload to the same audited commit, replace the placeholder below with one reviewed 40-character SHA:
 
 ```bash
-git clone https://github.com/Silverance/coralline ~/.claude/coralline-src
-mkdir -p ~/.claude/coralline/themes
-cp ~/.claude/coralline-src/statusline.sh ~/.claude/coralline/
-cp ~/.claude/coralline-src/configure.sh ~/.claude/coralline/
-cp ~/.claude/coralline-src/install.sh ~/.claude/coralline/
-cp ~/.claude/coralline-src/themes/claude-coral.conf ~/.claude/coralline/themes/
+SHA=YOUR_AUDITED_40_CHARACTER_COMMIT_SHA
+audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/coralline-audit.XXXXXX") || exit 1
+(
+  set -o pipefail
+  trap 'cd / && rm -rf "$audit_dir"' EXIT
+  cd "$audit_dir" || exit 1
+  curl -fsSL "https://raw.githubusercontent.com/Silverance/coralline/$SHA/install.sh" | bash -s -- --ref "$SHA"
+)
 ```
 
-Then add to `~/.claude/settings.json`:
+The unique temporary directory prevents stdin-executed Bash from treating a surrounding coralline checkout as its local source. Bash `--install-only` and updates do not edit `coralline.conf`; the wizard or AI changes it only after showing and receiving approval for the proposed change. Bash backs up `settings.json` and performs a semantic `jq` merge, so unrelated settings are retained but original formatting is not promised. The native installer follows the narrower managed/unmanaged boundary described above. Both renderers make no network requests after installation.
 
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/coralline/statusline.sh",
-    "refreshInterval": 1
-  }
-}
+## Configuration
+
+Bash reads `~/.claude/coralline.conf`; the native renderer can read the same file. It is sourced shell syntax, usually starting with one bundled theme:
+
+```bash
+. "$HOME/.claude/coralline/themes/claude-coral.conf"
 ```
 
-> **Note:** the commands above copy only the `claude-coral` theme. The Ask-Claude and one-line
-> installers bundle every theme; after a manual install, copy the rest of
-> `~/.claude/coralline-src/themes/*.conf` into `~/.claude/coralline/themes/` to switch themes.
+| Variable | Runtime default | Meaning |
+|---|---|---|
+| `VL_STYLE` | `pill` | `pill`, `lean`, or `classic` |
+| `VL_LAYOUT` | `fixed` | one row per `VL_SEGMENTS*`; `auto` wraps one list responsively |
+| `VL_MAX_LINES` / `VL_WRAP_MARGIN` | `3` / `4` | line cap and right margin for `auto` |
+| `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | first row, and the complete list in `auto` |
+| `VL_SEGMENTS2` / `VL_SEGMENTS3` | empty | optional fixed second and third rows |
+| `VL_CLOCK` / `VL_CLOCK_SECONDS` | `12h` / `1` | `12h`, `24h`, or `off`; seconds toggle |
+| `VL_BAR_WIDTH` | `5` | gauge width |
+| `VL_BAR_FILL` / `VL_BAR_EMPTY` | `▰` / `▱` | gauge glyphs |
+| `VL_CTX_GLYPH` / `VL_PROJECT_GLYPH` | `⬡` / `⬢` | context and project glyphs |
+| `VL_PATH_DEPTH` / `VL_NAME_MAX` | `4` / `0` | path collapsing and optional name truncation |
+| `VL_COST_DECIMALS` | `2` | cost precision |
+| `VL_CTX_ALWAYS_SHOW` / `VL_COST_ALWAYS_SHOW` | `0` / `0` | show valid missing/empty context or cost as zero |
+| `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
+| `VL_ASCII` | `0` | disable Nerd Font glyphs when `1` |
+| `VL_RUNTIME_PROBE` | `0` | let `node` and `python` probe `PATH` when no pin exists; adds forks per render |
+| `VL_LEAN_SEP` | empty | `lean` only — extra text between segments, e.g. `·` |
+| `VL_LEAN_BG` / `VL_BG_BAR` | empty | uniform background behind a `lean` / `classic` row |
+| `VL_LEAN_CAP_L` / `VL_LEAN_CAP_R` | empty | leading and trailing cap glyphs for that bar |
+| `VL_BG_*` / `VL_FG_*` | theme | 256-color index or `"R,G,B"` |
 
-### Updating
+Knobs added by this fork:
 
-Two ways to update, both driven by the same installer. Either way your
-`~/.claude/coralline.conf` is preserved and the previous `statusline.sh` is backed up
-under `~/.claude/coralline/` (the 3 newest are kept).
+| Variable | Default | Meaning |
+|---|---|---|
+| `VL_CTX_TOKENS` | `full` | `ctx` token detail: `full` (↑↓ + cache) · `io` (↑↓ only) · `off` |
+| `VL_GIT_CACHE` | `0` | reuse `git status` for this many seconds (helps huge repos at `refreshInterval: 1`); `0` = always live |
+| `VL_LIMIT_RESET` | `countdown` | limit-gauge reset display: `countdown` · `clock` (absolute time) · `both` |
+| `VL_GIT_LINK` | `0` | `1` = OSC 8 hyperlink the git branch to its GitHub page. Note: Claude Code's statusline strips OSC sequences, so this only shows up if you run the script outside Claude Code in an OSC 8-capable terminal |
+| `VL_SEP_GLYPH` / `VL_SEP_FG` | `┃` / empty | the `sep` divider's glyph and color (`lean` only) |
+| `VL_CUSTOM_CMD` | empty | shell command for the `custom` segment (first line of stdout is shown) |
+| `VL_CUSTOM_TIMEOUT` | `1` | seconds before the custom command is killed (when `timeout`/`gtimeout` is available) |
 
-#### Ask Claude (recommended)
+### Layout and styles
 
-Paste this into Claude Code:
+| Style | Result |
+|---|---|
+| `pill` | powerline pills with per-segment backgrounds |
+| `lean` | flat colored text with optional separators, uniform background, and caps |
+| `classic` | one-word preset for the p10k uniform dark bar and trailing cap ([PR #40](https://github.com/Nanako0129/coralline/pull/40)) |
+
+The installer can import selected style, color, and clock values from `~/.p10k.zsh`; see the [`INSTALL.md` mapping](./INSTALL.md#ai-interview).
+
+With `VL_LAYOUT="auto"` the bar stays on a single line while it fits, and greedily wraps into
+up to `VL_MAX_LINES` rows when the window gets narrow. Once the line cap is reached, remaining
+segments overflow on the last line. `VL_WRAP_MARGIN` keeps a few columns free on the right so
+wrapped lines never butt against the window edge — raise it if your terminal adds padding.
+
+Width comes from `$COLUMNS`. Claude Code v2.1.153+ sets `COLUMNS` to the current terminal width
+before running the status line, so wrapping responds to window resizing out of the box. Outside
+Claude Code the script falls back to `stty size` on the controlling terminal; if neither is
+available it stays on one line. The display-width implementation and portability rationale live
+in [PR #10](https://github.com/Nanako0129/coralline/pull/10).
 
 ```text
-Please update coralline for me:
-fetch https://raw.githubusercontent.com/Silverance/coralline/main/UPGRADE.md
-and follow the playbook in it.
+wide window:    ~/dev/app  ⎇ main  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62%  5h ▰▰▱▱▱ 41%  $1.23  ⊙ 14:45
+
+narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
+                ⬡ ▰▰▰▱▱ 62%  5h ▰▰▱▱▱ 41%  $1.23  ⊙ 14:45
 ```
 
-Claude re-runs the installer, reads the "new since your installed copy" report, and
-offers to turn on any new opt-in features for you.
+### Themes
 
-#### Update it yourself
+A theme is a `.conf` file assigning `VL_BG_*` and `VL_FG_*`; the wizard discovers `.conf` files
+recursively under [`themes/`](./themes/).
 
-Re-run the installer — it prints a short "new since your installed copy" report when
-something new shipped:
+Each segment draws with a fixed foreground knob, so a pill set to that same colour renders
+nothing at all. Every bundled theme therefore carries contrast-checked values for the segments
+this fork adds, on two tiers: 4.5:1 for the ones that carry signal you must read
+(`worktree`, `vim`, `custom`, `conflicts`, `cache`) and 3:1 for the deliberately recessed
+metadata drawn in `VL_FG_DIM` (`sha`, `version`, `session`). `test/test-contrast.sh` holds
+every theme to those tiers.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.sh | bash -s -- --install-only
-```
-
-## Setup
-
-Both paths use the same installer. Humans run it with no mode and get the visual setup. Claude
-uses it with `--install-only`, then follows `INSTALL.md` to interview you and write config.
-
-### Setup modes
-
-| Mode | Use when |
+| | |
 |---|---|
-| Default | You want the coralline default immediately |
-| Powerlevel10k import | You already have `~/.p10k.zsh` and want to carry over its style, time format, and main colors |
-| Visual wizard | You want to preview themes, style, segments, wrapping, clock, and font compatibility before writing config |
-
-Running the installer yourself with no mode opens the interactive setup. Claude should not
-operate that TUI unless you explicitly ask for visual customization.
-
-### Reconfigure
-
-Every install path copies the wizard into `~/.claude/coralline`, so you can rerun it anytime to
-restyle:
-
-```bash
-bash ~/.claude/coralline/configure.sh
-```
-
-### Testing a fork
-
-Point the installer at the same fork:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/YOU/coralline/main/install.sh | bash -s -- --repo YOU/coralline
-```
+| **`claude-coral`** — steel blue · mauve · Claude coral (default)<br>![claude-coral theme preview](./assets/theme-claude-coral.png) | **`catppuccin-mocha`** — soft pastels on dark<br>![catppuccin-mocha theme preview](./assets/theme-catppuccin-mocha.png) |
+| **`nord`** — arctic frost<br>![nord theme preview](./assets/theme-nord.png) | **`gruvbox-dark`** — warm retro<br>![gruvbox-dark theme preview](./assets/theme-gruvbox-dark.png) |
+| **`tokyo-night`** — neon on deep navy<br>![tokyo-night theme preview](./assets/theme-tokyo-night.png) | **`mono`** — grayscale minimalism<br>![mono theme preview](./assets/theme-mono.png) |
+| **`dracula`** — cyan · pink · purple on charcoal<br>![dracula theme preview](./assets/theme-dracula.png) | **`lunar-pink`** — pink · cyan · yellow on near-black<br>![lunar-pink theme preview](./assets/theme-lunar-pink.png) |
+| **`reverie`** — soft pastels · plum text on warm-dark<br>![reverie theme preview](./assets/theme-reverie.png) | **`morning-haze`** — hazy pastels on slate<br>![morning-haze theme preview](./assets/theme-morning-haze.png) |
+| **`warp`** — tuned to Warp's default dark theme<br>_(preview pending: `python3 tools/render-screenshots.py`)_ | |
 
 ### Verify your setup
 
@@ -194,33 +229,31 @@ Font powerline glyphs out of the box. Two things to set:
 The responsive `auto` layout reacts to window resizing in Warp the same as any terminal: Claude
 Code sets `COLUMNS` before each render, and coralline wraps to fit.
 
-## Configuration
+## Optional features
 
-Everything lives in `~/.claude/coralline.conf` (plain bash, sourced by the script):
+### Subagent panel
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `VL_STYLE` | `pill` | `pill`: powerline pills · `lean`: flat colored text, p10k-lean style |
-| `VL_LAYOUT` | `fixed` | `fixed`: one line per `VL_SEGMENTS*` var · `auto`: responsive |
-| `VL_MAX_LINES` | `3` | `auto` only — wrap into at most this many lines (`1` = never wrap) |
-| `VL_WRAP_MARGIN` | `4` | `auto` only — columns kept free on the right so segments never touch the edge |
-| `VL_SEGMENTS` | `dir git model ctx limit5h limit7d cost clock` | segments on line 1, in order (the full list in `auto` mode) |
-| `VL_SEGMENTS2` / `VL_SEGMENTS3` | _(empty)_ | `fixed` only — optional second/third line |
-| `VL_CLOCK` | `12h` | `12h` / `24h` / `off` |
-| `VL_CLOCK_SECONDS` | `1` | show seconds in the clock |
-| `VL_BAR_WIDTH` | `5` | gauge width in cells |
-| `VL_PATH_DEPTH` | `4` | collapse paths deeper than this |
-| `VL_NAME_MAX` | `0` | max chars for the `dir` leaf / `project` / `git` / `worktree` names before `…` truncation (`0` = off) |
-| `VL_CTX_TOKENS` | `full` | `ctx` token detail: `full` (↑↓ + cache) · `io` (↑↓ only) · `off` |
-| `VL_COST_DECIMALS` | `2` | decimal places for the cost segment |
-| `VL_WARN_PCT` / `VL_HOT_PCT` | `50` / `75` | gauge color thresholds |
-| `VL_GIT_CACHE` | `0` | reuse `git status` for this many seconds (helps huge repos at `refreshInterval: 1`); `0` = always live |
-| `VL_LIMIT_RESET` | `countdown` | limit-gauge reset display: `countdown` · `clock` (absolute time) · `both` |
-| `VL_GIT_LINK` | `0` | `1` = OSC 8 hyperlink the git branch to its GitHub page. Note: Claude Code's statusline strips OSC sequences, so this only shows up if you run the script outside Claude Code in an OSC 8-capable terminal |
-| `VL_CUSTOM_CMD` | _(empty)_ | shell command for the `custom` segment (first line of stdout is shown) |
-| `VL_CUSTOM_TIMEOUT` | `1` | seconds before the custom command is killed (when `timeout`/`gtimeout` is available) |
-| `VL_ASCII` | `0` | `1` disables Nerd Font glyphs |
-| `VL_BG_*` / `VL_FG_*` | theme | colors — `256`-color index or `"R,G,B"` |
+![coralline's main statusline above themed subagent panel rows](./assets/subagent-panel.png)
+
+Enable or disable themed subagent rows explicitly:
+
+```bash
+bash ~/.claude/coralline/configure.sh --subagent-rows=on
+bash ~/.claude/coralline/configure.sh --subagent-rows=off
+```
+
+Bash install-only and ordinary updates do not add or remove `subagentStatusLine`; only the wizard choice or explicit commands above change it. The native installer defaults to `-SubagentRows preserve`, and changes the setting only with explicit `on` or `off`.
+
+Per-task model and context fields require Claude Code v2.1.205+. On v2.1.211, coralline recovers a missing local `agentType` role from the task sidecar; without the sidecar it still uses payload names and labels. Missing model or start time hides only the corresponding segment. `ctx` hides only when token count is missing or invalid; without a valid context size, it still shows the glyph and bare token count while omitting only the gauge and percentage. Rows redraw on panel events, not a one-second poll; the native main-session row remains, and per-task effort is not inferred. The design and current fallback behavior are traced in [issue #45](https://github.com/Nanako0129/coralline/issues/45) and [PR #44](https://github.com/Nanako0129/coralline/pull/44).
+
+| `VL_SUB_SEGMENTS` value | Shows |
+|---|---|
+| `name` | task identity and label, colored by status |
+| `model` | per-task model |
+| `ctx` | context gauge and token count |
+| `elapsed` | elapsed wall-clock time |
+
+The default order is `name model ctx elapsed`.
 
 ### Burn-rate segment
 
@@ -252,127 +285,78 @@ fit, so the 7d projection binds and you see `↗ 7d`.
 
 ### Cross-session limit sync (optional)
 
-`VL_LIMIT_SYNC=1` makes `limit5h` / `limit7d` show the freshest rate-limit reading any of your sessions has seen, instead of just this session's own snapshot. Each render records its `5h` / `7d` value to a small per-host store (`limit-5h.d` / `limit-7d.d`), and the segments display the highest percentage recorded for the current window. Off by default.
+Set `VL_LIMIT_SYNC=1` to let sessions that redraw share the account's open 5h and 7d windows through `limit-5h.d` and `limit-7d.d`. A session's valid reading always wins its own window; the store wins for a strictly newer window or when the session has no reading, using only a still-open stored window. It is off by default, has no API access, and cannot refresh an idle session. The store lives under `~/.claude/coralline`, or under `$CLAUDE_CONFIG_DIR/coralline` when that variable is set, as do the burn samples and the float file, so two Claude config directories keep separate state instead of overwriting each other's windows. See the original redraw-only contract in [PR #24](https://github.com/Nanako0129/coralline/pull/24) and the no-reading fallback in [PR #64](https://github.com/Nanako0129/coralline/pull/64).
 
-This exists because Claude Code re-renders a session's statusline only when that session is active, and the rate-limit numbers it passes are that session's last-seen values. So idle sessions show stale, divergent percentages. With sync on, every session converges to the latest known value the next time it redraws.
+### Float readout (optional)
 
-> **It only updates on redraw.** It cannot refresh a session that is not redrawing at all, and "latest known" is only as fresh as your most recently active session. coralline has no API access. So this narrows the gap between sessions, it does not make a fully idle bar live.
+Set `VL_FLOAT=1` to write a plain-text line to `~/.claude/coralline/float.txt` on each render. The default `VL_FLOAT_SEGMENTS` is `model ctx cost`. coralline ships no display carrier; the file is the integration seam, with an unsupported [iTerm2 example](./example/float-display-iterm2/) included. The design boundary is documented in [issue #15](https://github.com/Nanako0129/coralline/issues/15).
 
-Single-session users gain nothing from it (there is only one snapshot), so it stays opt-in.
+## Update, reconfigure, and uninstall
 
-### Responsive layout
+### Updating
 
-With `VL_LAYOUT="auto"` the bar stays on a single line while it fits, and greedily wraps into
-up to `VL_MAX_LINES` rows when the window gets narrow. Once the line cap is reached, remaining
-segments overflow on the last line. `VL_WRAP_MARGIN` keeps a few columns free on the right so
-wrapped lines never butt against the window edge — raise it if your terminal adds padding.
-
-Width comes from `$COLUMNS`. Claude Code v2.1.153+ sets `COLUMNS` to the current terminal width
-before running the status line, so wrapping responds to window resizing out of the box. Outside
-Claude Code the script falls back to `stty size` on the controlling terminal; if neither is
-available it stays on one line.
+Ask Claude to follow the upgrade playbook:
 
 ```text
-wide window:    ~/dev/app  ⎇ main  ◆ Fable 5  ⬡ ▰▰▰▱▱ 62%  5h ▰▰▱▱▱ 41%  $1.23  ⊙ 14:45
-
-narrow window:  ~/dev/app  ⎇ main  ◆ Fable 5
-                ⬡ ▰▰▰▱▱ 62%  5h ▰▰▱▱▱ 41%  $1.23  ⊙ 14:45
+Please update coralline for me:
+fetch https://raw.githubusercontent.com/Silverance/coralline/main/UPGRADE.md
+and follow the playbook in it.
 ```
 
-Prefer a layout that never moves? Keep `VL_LAYOUT="fixed"` and pin rows with
-`VL_SEGMENTS` / `VL_SEGMENTS2` / `VL_SEGMENTS3`.
+Or update a Bash install directly from a directory outside any coralline checkout:
 
-### Lean style
+```bash
+curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.sh | bash -s -- --install-only
+```
 
-Prefer Powerlevel10k's *lean* look — no backgrounds, just colored text? Set
-`VL_STYLE="lean"` and each segment's `VL_BG_*` color becomes its text accent instead:
+The URLs above fetch mutable `main` playbook or bootstrap code. Run the direct updater outside a coralline checkout; inside one, the installer intentionally uses that checkout's files instead of downloading a remote payload. Outside a checkout, the Bash installer keeps `main` in non-interactive runs. In an interactive `--install-only` run, it asks which payload ref to install and defaults to the latest tagged release when that tag can be resolved; if release lookup fails, it keeps `main` without prompting. Pass `--ref main` to request the development payload explicitly. A previously pinned install does not make a later unpinned update immutable. For an audited update, fetch `UPGRADE.md` from one reviewed 40-character SHA, then run `install.sh` from that same SHA and a neutral temporary directory as above, passing the same SHA through `--ref`. Re-run the native bootstrap with the same selected ref for PowerShell-only Windows. The installer reports new opt-ins but preserves existing choices unless approved; see [issue #31](https://github.com/Nanako0129/coralline/issues/31) and the current [`UPGRADE.md`](./UPGRADE.md).
 
-![Lean style compared with pill style](./assets/style-lean.png)
+### Reconfigure
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `VL_STYLE` | `pill` | set to `lean` for the flat look |
-| `VL_LEAN_SEP` | _(empty)_ | extra text between segments, e.g. `·` |
-| `VL_LEAN_FG` | _(empty)_ | force a text color; empty = inherit each segment's accent |
+Bash-capable installs include the visual wizard:
 
-> **Tip:** already a p10k user? Tell the AI installer or the visual wizard to import your
-> `~/.p10k.zsh` — it will carry over your style, colors, and time format after you opt in.
-> See the [AI interview notes in INSTALL.md](./INSTALL.md#ai-interview).
+```bash
+bash ~/.claude/coralline/configure.sh
+```
 
-## Float readout (optional)
+PowerShell-only installs have no native wizard; back up and edit `coralline.conf` manually or reuse one created on a Bash-capable host.
 
-`VL_FLOAT=1` makes `statusline.sh` write a one-line **plain-text** readout to
-`~/.claude/coralline/float.txt` on every render (segments from
-`VL_FLOAT_SEGMENTS`, default `model ctx cost`). That's all coralline does —
-it ships **no display carrier**. The file is the seam: pipe it wherever you want
-a glanceable readout that stays visible without looking at Claude Code's bottom
-statusline (a terminal status bar, tmux, a menu-bar app, …).
+### Uninstall
 
-The readout is **plain text** (no ANSI color), so the default favors stable,
-glance-friendly segments and leaves the color-driven limit warnings
-(`limit5h` / `limit7d`) in the bottom statusline, where threshold colors work.
-You can still add them to `VL_FLOAT_SEGMENTS` if you want the numbers up top.
+The runtime directory can contain custom themes, burn and limit history, `float.txt`, and other unmanaged files. Back up anything you want to keep before deleting it. Also back up the current `~/.claude/settings.json`, then remove `statusLine` or `subagentStatusLine` only if its command still points to coralline; do not restore an old whole-file backup without comparing unrelated changes made since it was created.
 
-**Config keys**
+For Bash-capable systems, inspect and edit the current settings before removing the runtime:
 
-| Key | Default | Meaning |
-|---|---|---|
-| `VL_FLOAT` | `0` | `1` = write `float.txt` each render |
-| `VL_FLOAT_SEGMENTS` | `model ctx cost` | segments rendered into the readout (plain text, no color) |
-| `VL_FLOAT_SEP` | `  ·  ` | separator between segments |
-| `VL_FLOAT_FILE` | `~/.claude/coralline/float.txt` | where the readout is written |
+```bash
+settings="$HOME/.claude/settings.json"
+cp "$settings" "$settings.bak.$(date +%Y%m%d%H%M%S)"
+"${EDITOR:-vi}" "$settings"
+rm -rf "$HOME/.claude/coralline"
+# Optional: remove your saved preferences too.
+rm -f "$HOME/.claude/coralline.conf"
+```
 
-(Or toggle `VL_FLOAT` via "float readout" in `configure.sh`'s Details menu.)
+For PowerShell-only systems:
 
-A worked iTerm2 carrier (the `coralline-float` companion + setup steps) lives in
-[`example/float-display-iterm2/`](example/float-display-iterm2/) — copy it into
-your dotfiles and adapt. Other terminals (tmux, WezTerm, a menu-bar app, …) just
-need to read `float.txt` the same way.
+```powershell
+$settings = Join-Path $HOME '.claude\settings.json'
+Copy-Item -LiteralPath $settings -Destination "$settings.bak.$(Get-Date -Format yyyyMMddHHmmss)"
+notepad.exe $settings
+Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline') -Recurse -Force
+# Optional: remove your saved preferences too.
+Remove-Item -LiteralPath (Join-Path $HOME '.claude\coralline.conf') -Force -ErrorAction SilentlyContinue
+```
 
-## Themes
+## Platform and performance
 
-| | |
+| Platform | Support |
 |---|---|
-| **`claude-coral`** — steel blue · mauve · Claude coral (default)<br>![claude-coral theme preview](./assets/theme-claude-coral.png) | **`catppuccin-mocha`** — soft pastels on dark<br>![catppuccin-mocha theme preview](./assets/theme-catppuccin-mocha.png) |
-| **`nord`** — arctic frost<br>![nord theme preview](./assets/theme-nord.png) | **`gruvbox-dark`** — warm retro<br>![gruvbox-dark theme preview](./assets/theme-gruvbox-dark.png) |
-| **`tokyo-night`** — neon on deep navy<br>![tokyo-night theme preview](./assets/theme-tokyo-night.png) | **`mono`** — grayscale minimalism<br>![mono theme preview](./assets/theme-mono.png) |
-| **`dracula`** — cyan · pink · purple on charcoal<br>![dracula theme preview](./assets/theme-dracula.png) | **`lunar-pink`** — pink · cyan · yellow on near-black<br>![lunar-pink theme preview](./assets/theme-lunar-pink.png) |
-| **`reverie`** — soft pastels · plum text on warm-dark<br>![reverie theme preview](./assets/theme-reverie.png) | **`warp`** — tuned to Warp's default dark theme<br>![warp theme preview](./assets/theme-warp.png) |
+| macOS | stock Bash 3.2 |
+| Linux | Bash 4+ / 5 |
+| Windows with Git Bash | Bash renderer |
+| Windows without Git Bash | native Windows PowerShell 5.1 renderer |
 
-A theme is just a `.conf` file assigning `VL_BG_*` / `VL_FG_*` — copy one, change the colors,
-and source yours from `coralline.conf` instead. PRs with new themes are welcome.
-The wizard discovers themes automatically from `themes/*.conf` and nested collections such as
-`themes/best-themes/*.conf`, so adding a theme file does not require editing `configure.sh`.
-
-> **Adding a theme?** Copy an existing `.conf`, set every `VL_BG_*` / `VL_FG_*`
-> (including `VL_BG_EFFORT`), add its name to the `THEMES` list in
-> [`tools/render-screenshots.py`](./tools/render-screenshots.py), re-run it to generate
-> `assets/theme-<name>.png`, and add a row to the table above. Please **don't regenerate
-> `hero.png`** — it's a fixed sampler of the original six themes, not a full catalog.
-
-## Platform support
-
-| Platform | Status |
-|---|---|
-| macOS | ✅ supported (works on the stock bash 3.2) |
-| Linux | ✅ supported |
-| Windows + Git Bash | ✅ supported — Claude Code runs the status line through Git Bash when it's installed |
-| Windows without Git Bash | ❌ not yet — Claude Code falls back to PowerShell, which can't run the bash script ([roadmap](https://github.com/Silverance/coralline/issues)) |
-
-> **Windows note:** install [Git for Windows](https://git-scm.com/download/win) (which bundles
-> Git Bash) and `jq`, and coralline runs natively. A native PowerShell port for the no-Git-Bash
-> case is on the roadmap. The render path is built to stay cheap under Git Bash's emulated
-> `fork()` — one `jq`, one `git`, and no per-field subprocess spawning.
-
-## Why it's fast
-
-The statusline is just a local shell script: it makes no network or API calls and uses zero
-tokens. Claude Code pipes the session JSON to it on stdin and renders whatever it prints.
-
-It runs every second (`refreshInterval: 1`), so the script is built to be cheap on CPU: one
-`jq` invocation extracts every field at once, and one `git status --porcelain=v2 --branch`
-call provides branch, dirty state, and ahead/behind together. No `bc`, no per-field subprocess
-spam. Works on stock macOS bash 3.2 and any Linux bash.
+The renderer is local: no network or API calls and zero token use. The Bash main bar parses its payload with one `jq` call; both renderers use at most one `git status --porcelain=v2 --branch` call per render and no per-field subprocesses. Claude Code re-runs the status line every second (`refreshInterval: 1`), so helpers return through globals rather than `$(...)` subshells and there is no `bc` or per-field process spam. Reproducible measurement guidance is in [BENCHMARK.md](./BENCHMARK.md), introduced in [PR #65](https://github.com/Nanako0129/coralline/pull/65).
 
 ## Acknowledgements
 
@@ -388,9 +372,14 @@ As for the name: coralline algae build reefs one thin, colorful layer at a time 
 and **coral·line** is exactly what this is: a line, in Claude's coral.
 
 This repository is a fork of [coralline by Nanako0129](https://github.com/Nanako0129/coralline),
-maintained by [@Silverance](https://github.com/Silverance). It carries the upstream work forward
-and adds per-model limit gauges, the worktree location badge, and the `cache` / `vim` / `sha` /
-`conflicts` / `session` / `version` / `custom` segments, plus a few extra options.
+maintained by [@Silverance](https://github.com/Silverance). It carries the upstream work forward —
+including the native PowerShell renderer, the subagent panel, the `classic` style and p10k import,
+the `node` / `python` runtime segments, and the shared burn/limit state store — and adds per-model
+limit gauges, the worktree location badge, the `cache` / `vim` / `sha` / `conflicts` / `session` /
+`version` / `custom` / `sep` segments, a git-status cache, `--doctor`, and the `warp` theme.
+
+Upstream maintenance is supported on Patreon:
+[patreon.com/cw/Nanako0129/membership](https://www.patreon.com/cw/Nanako0129/membership).
 
 ## License
 

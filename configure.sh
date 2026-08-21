@@ -15,7 +15,7 @@ P10K_FILE="${P10K_CONFIG:-$HOME/.p10k.zsh}"
 
 # Fallback list, used only when the runtime statusline cannot be scanned.
 # The live list is derived from statusline.sh's seg_* functions by load_segment_choices.
-SEGMENT_CHOICES="dir project git model effort ctx limit5h limit7d burn lines cost style duration stash clock"
+SEGMENT_CHOICES="dir project git node python model effort ctx limit5h limit7d burn lines cost style duration stash clock"
 DEFAULT_SEGMENTS="dir git model ctx limit5h limit7d cost clock"
 THEME_CHOICES=""
 theme_choices_loaded=0
@@ -67,6 +67,10 @@ Options:
                Copy coralline into ~/.claude/coralline and update Claude settings,
                then exit without writing theme config.
   --default    Use the coralline default config without opening the setup menu.
+  --subagent-rows=on|off
+               Register (or remove) the subagent panel renderer in Claude
+               settings and exit — the non-interactive twin of the wizard's
+               closing question, for AI installs and upgrades.
   --import-p10k
                Import ~/.p10k.zsh without opening the setup menu.
   --wizard     Open the visual wizard directly.
@@ -167,6 +171,16 @@ knob_names() {  # $1=statusline file
     | grep -v '#.*0[[:space:]]*=' \
     | sed -E 's/=0.*$//' | sort -u | tr '\n' ' '
 }
+
+# Glyph knobs (VL_CTX_GLYPH, VL_BAR_EMPTY, ...) are deliberately NOT reported
+# here. An option token is the exact assignment the UPGRADE.md playbook appends,
+# and the right value for a glyph depends on what the user's terminal font
+# carries — something no delta can know. Emitting the shipped default would
+# write a no-op; emitting a replacement would change the look of installs that
+# render fine. Worse, the two gauge knobs are not new, so a "new since your
+# installed copy" report structurally cannot surface them at all. That check
+# lives in UPGRADE.md's verification step instead, where the user is already
+# looking at a rendered line (#47).
 
 # Inline comment after `seg_<name>() {`, else empty.
 segment_desc() {  # $1=statusline file $2=segment name
@@ -527,13 +541,36 @@ normalize_segments() {
 }
 
 import_p10k() {
-  local wizard_options time_fmt
+  local wizard_options time_fmt bg sep
   [ -f "$P10K_FILE" ] || die "cannot import; $P10K_FILE does not exist"
 
   wizard_options=$(grep -E '^# Wizard options:' "$P10K_FILE" 2>/dev/null | tail -1)
   case "$wizard_options" in
     *lean*) style="lean" ;;
-    *classic*|*rainbow*|*powerline*) style="pill" ;;
+    *classic*)
+      # p10k "classic" is lean text on one uniform background bar, so emit
+      # coralline's first-class classic style (statusline.sh resolves it to lean plus
+      # a default bar + end cap). Carry p10k's own background and separator as
+      # explicit overrides so a personalised classic still reproduces exactly; the
+      # per-segment colours come through as foregrounds (the classic branch below).
+      style="classic"
+      bg=$(p10k_value POWERLEVEL9K_BACKGROUND || true)
+      [ -n "$bg" ] && bg=$(normalize_color "$bg") && add_extra VL_LEAN_BG "$bg"
+      sep=$(p10k_value POWERLEVEL9K_LEFT_SEGMENT_SEPARATOR || true)
+      # Decode p10k's \uXXXX escape to real UTF-8 bytes with jq (already required):
+      # bash 3.2 (stock macOS /bin/bash) does not expand $'\uXXXX', so writing the
+      # escape verbatim would leave a literal 6-char string; jq decodes it and passes
+      # an already-literal glyph through unchanged. Emit it shell-quoted (write_assign,
+      # via printf %q) rather than through add_extra's bare double quotes, so an odd or
+      # hostile separator (a quote, $, or backtick) cannot break or inject into the
+      # sourced coralline.conf; %q stays bash-3.2-safe too.
+      if [ -n "$sep" ]; then
+        sep=$(printf '"%s"' "$sep" | jq -r . 2>/dev/null) || sep=""
+        [ -n "$sep" ] && extra_config="${extra_config}$(write_assign VL_LEAN_CAP_R "$sep")
+"
+      fi
+      ;;
+    *rainbow*|*powerline*) style="pill" ;;
   esac
   case "$wizard_options" in
     *24h\ time*) clock_mode="24h" ;;
@@ -547,19 +584,23 @@ import_p10k() {
     *%S*) clock_seconds=1 ;;
   esac
 
-  if [ "$style" = "lean" ]; then
-    map_p10k_color POWERLEVEL9K_DIR_FOREGROUND VL_BG_DIR
-    map_p10k_color POWERLEVEL9K_VCS_CLEAN_FOREGROUND VL_BG_GIT_OK
-    map_p10k_color POWERLEVEL9K_VCS_MODIFIED_FOREGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_FOREGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_TIME_FOREGROUND VL_BG_CLOCK
-  else
-    map_p10k_color POWERLEVEL9K_DIR_BACKGROUND VL_BG_DIR
-    map_p10k_color POWERLEVEL9K_VCS_CLEAN_BACKGROUND VL_BG_GIT_OK
-    map_p10k_color POWERLEVEL9K_VCS_MODIFIED_BACKGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_BACKGROUND VL_BG_GIT_DIRTY
-    map_p10k_color POWERLEVEL9K_TIME_BACKGROUND VL_BG_CLOCK
-  fi
+  # lean and classic both colour the text (foregrounds); pill colours pill backgrounds.
+  case "$style" in
+    lean|classic)
+      map_p10k_color POWERLEVEL9K_DIR_FOREGROUND VL_BG_DIR
+      map_p10k_color POWERLEVEL9K_VCS_CLEAN_FOREGROUND VL_BG_GIT_OK
+      map_p10k_color POWERLEVEL9K_VCS_MODIFIED_FOREGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_FOREGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_TIME_FOREGROUND VL_BG_CLOCK
+      ;;
+    *)
+      map_p10k_color POWERLEVEL9K_DIR_BACKGROUND VL_BG_DIR
+      map_p10k_color POWERLEVEL9K_VCS_CLEAN_BACKGROUND VL_BG_GIT_OK
+      map_p10k_color POWERLEVEL9K_VCS_MODIFIED_BACKGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_VCS_UNTRACKED_BACKGROUND VL_BG_GIT_DIRTY
+      map_p10k_color POWERLEVEL9K_TIME_BACKGROUND VL_BG_CLOCK
+      ;;
+  esac
   map_p10k_color POWERLEVEL9K_STATUS_OK_FOREGROUND VL_FG_OK
   map_p10k_color POWERLEVEL9K_STATUS_ERROR_FOREGROUND VL_FG_HOT
 }
@@ -604,6 +645,12 @@ render_preview() {
   tmp=$(mktemp "${TMPDIR:-/tmp}/coralline-config.XXXXXX") || exit 1
   input=$(prepare_preview_input)
   write_candidate_config "$tmp"
+  # Preview only: the node/python segments detect from the cwd (the coralline
+  # clone, which has no version pins), so with the shipped VL_RUNTIME_PROBE=0
+  # they self-suppress and adding them shows no change. Enable the probe just for
+  # the preview so they render the real interpreter version; the saved config is
+  # untouched and keeps the fork-free default.
+  printf 'VL_RUNTIME_PROBE=1\n' >> "$tmp"
   cache=$(preview_cache_path "$tmp" "$cols")
   printf '\nPreview (%s cols):\n' "$cols"
   if [ ! -f "$cache" ]; then
@@ -744,23 +791,30 @@ choose_theme_screen() {
   done
 }
 
+style_from_index() {  # index → style name (0 pill · 1 lean · 2 classic)
+  case "$1" in 2) printf classic ;; 1) printf lean ;; *) printf pill ;; esac
+}
+
 choose_style_screen() {
   local selected key pointer mark
-  [ "$style" = "lean" ] && selected=1 || selected=0
+  case "$style" in classic) selected=2 ;; lean) selected=1 ;; *) selected=0 ;; esac
   while :; do
-    [ "$selected" = "1" ] && style="lean" || style="pill"
+    style=$(style_from_index "$selected")
     draw_screen_header "Style" 120
     [ "$selected" = "0" ] && mark="✓" || mark=" "
     [ "$selected" = "0" ] && draw_option 1 "$mark" "pill" || draw_option 0 "$mark" "pill"
     [ "$selected" = "1" ] && mark="✓" || mark=" "
     [ "$selected" = "1" ] && draw_option 1 "$mark" "lean" || draw_option 0 "$mark" "lean"
+    [ "$selected" = "2" ] && mark="✓" || mark=" "
+    [ "$selected" = "2" ] && draw_option 1 "$mark" "classic (p10k dark bar)" || draw_option 0 "$mark" "classic (p10k dark bar)"
     draw_screen_footer
     clear_tail
     read_key || return 1; key="$KEY"
     case "$key" in
-      up|down) selected=$(menu_move "$selected" "$key" 2) ;;
+      up|down) selected=$(menu_move "$selected" "$key" 3) ;;
       enter)
-        [ "$selected" = "1" ] && style="lean" || style="pill"
+        style=$(style_from_index "$selected")
+        # Only lean carries a user-visible separator; pill and classic clear it.
         if [ "$style" = "lean" ]; then
           leave_screen
           lean_sep=$(ask "Lean separator, empty is okay" "$lean_sep")
@@ -996,11 +1050,13 @@ choose_style() {
     printf '\nPick a style.\n'
     printf '  1) [%s] pill\n' "$(check_mark "$style" "pill")"
     printf '  2) [%s] lean\n' "$(check_mark "$style" "lean")"
-    answer=$(ask "Style number, Enter to keep" "$([ "$style" = "lean" ] && printf 2 || printf 1)")
+    printf '  3) [%s] classic (p10k dark bar)\n' "$(check_mark "$style" "classic")"
+    answer=$(ask "Style number, Enter to keep" "$(case "$style" in classic) printf 3 ;; lean) printf 2 ;; *) printf 1 ;; esac)")
     case "$answer" in
       1) style="pill"; lean_sep=""; show_step "Style selected" 120; return 0 ;;
       2) style="lean"; lean_sep=$(ask "Lean separator, empty is okay" "$lean_sep"); show_step "Style selected" 120; return 0 ;;
-      *) printf 'Choose 1 or 2.\n' >&2 ;;
+      3) style="classic"; lean_sep=""; show_step "Style selected" 120; return 0 ;;
+      *) printf 'Choose 1, 2, or 3.\n' >&2 ;;
     esac
   done
 }
@@ -1183,10 +1239,22 @@ write_final_config() {
       return 1
     fi
   fi
-  mkdir -p "$(dirname "$CONFIG_FILE")"
-  mv "$tmp" "$CONFIG_FILE"
+  # Fail loud if the config cannot be written, rather than printing Wrote and
+  # rendering against a stale config. Without these guards the unconditional
+  # return 0 below would report success even when the write did not land at
+  # $CONFIG_FILE. The -d check comes first: mv into a directory (or a symlink to
+  # one) "succeeds" by dropping the temp file inside it under its mktemp name,
+  # leaving $CONFIG_FILE a directory that statusline.sh never sources.
+  [ -d "$CONFIG_FILE" ] && die "config path $CONFIG_FILE is a directory, expected a file"
+  mkdir -p "$(dirname "$CONFIG_FILE")" || die "could not create $(dirname "$CONFIG_FILE")"
+  mv "$tmp" "$CONFIG_FILE" || die "could not write $CONFIG_FILE"
   printf '%sWrote%s %s\n' "$T_GREEN" "$T_RESET" "$CONFIG_FILE"
   [ "$float_enabled" = "1" ] && print_float_help
+  # Return success explicitly: the trailing float test above is 1 when float is
+  # off (the default), which would otherwise make the caller's
+  # `write_final_config || exit 0` bail before the verification render. The only
+  # intentional non-zero exit is the "user declined overwrite" path above.
+  return 0
 }
 
 install_files() {
@@ -1231,35 +1299,109 @@ THEMES
   installed=1
 }
 
-update_settings() {
-  local tmp backup
+settings_merge() {  # apply jq filter $1 (plus any --arg pairs after it) to settings.json
+  # One shared pipeline for every settings.json write: timestamped backup, merge
+  # into a sibling temp file, fail loud on every write error, atomic rename.
+  # A missing or zero-byte file starts from null (jq -n); delete callers guard before calling.
+  local filter="$1" dir tmp backup stamp n=0 ; shift
   command -v jq >/dev/null 2>&1 || die "jq is required to merge Claude settings"
-  mkdir -p "$(dirname "$SETTINGS_FILE")"
-  tmp=$(mktemp "${TMPDIR:-/tmp}/coralline-settings.XXXXXX") || exit 1
+  dir=$(dirname "$SETTINGS_FILE")
+  mkdir -p "$dir" || die "could not create settings directory $dir"
+  tmp=$(mktemp "$dir/.coralline-settings.XXXXXX") \
+    || die "could not create a temporary settings file in $dir"
   if [ -f "$SETTINGS_FILE" ]; then
-    backup="$SETTINGS_FILE.bak.$(date +%Y%m%d%H%M%S)"
-    cp "$SETTINGS_FILE" "$backup"
-    if ! jq --arg command "bash $TARGET_DIR/statusline.sh" '.statusLine = {
-      "type": "command",
-      "command": $command,
-      "refreshInterval": 1
-    }' "$SETTINGS_FILE" > "$tmp"; then
+    stamp=$(date +%Y%m%d%H%M%S)
+    backup="$SETTINGS_FILE.bak.$stamp"
+    while [ -e "$backup" ]; do
+      n=$((n + 1)); backup="$SETTINGS_FILE.bak.$stamp.$n"
+    done
+    if ! cp "$SETTINGS_FILE" "$backup"; then
+      rm -f "$backup" "$tmp"
+      die "could not back up $SETTINGS_FILE; original left unchanged"
+    fi
+    if [ ! -s "$SETTINGS_FILE" ]; then
+      jq -ne "$@" "$filter" > "$tmp" || {
+        rm -f "$tmp"
+        die "failed to create settings from empty $SETTINGS_FILE; original left unchanged, backup written to $backup"
+      }
+    elif ! jq -e "$@" "$filter" "$SETTINGS_FILE" > "$tmp"; then
       rm -f "$tmp"
       die "failed to parse $SETTINGS_FILE; original left unchanged, backup written to $backup"
     fi
-  else
-    cat > "$tmp" <<EOF
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bash $TARGET_DIR/statusline.sh",
-    "refreshInterval": 1
-  }
-}
-EOF
+  elif ! jq -ne "$@" "$filter" > "$tmp"; then
+    rm -f "$tmp"
+    die "failed to create $SETTINGS_FILE"
   fi
-  mv "$tmp" "$SETTINGS_FILE"
+  if ! mv "$tmp" "$SETTINGS_FILE"; then
+    rm -f "$tmp"
+    die "could not replace $SETTINGS_FILE; original left unchanged${backup:+, backup written to $backup}"
+  fi
+}
+
+update_settings() {
+  local command
+  printf -v command 'bash %q' "$TARGET_DIR/statusline.sh"
+  settings_merge '.statusLine = {"type": "command", "command": $command, "refreshInterval": 1}' \
+    --arg command "$command"
   printf 'Updated %s\n' "$SETTINGS_FILE"
+}
+
+subagent_enabled() {  # exit 0 when settings.json registers the subagent renderer
+  [ -f "$SETTINGS_FILE" ] || return 1
+  jq -e '
+    .subagentStatusLine as $s |
+    if ($s | type) != "object" then false
+    elif $s.type != "command" then false
+    elif ($s.command | type) != "string" then false
+    else ($s.command | endswith(" --subagent"))
+    end
+  ' "$SETTINGS_FILE" >/dev/null 2>&1
+}
+
+enable_subagent_statusline() {
+  # No refreshInterval here: Claude Code documents it for statusLine only;
+  # subagentStatusLine re-renders on panel events.
+  local command
+  printf -v command 'bash %q --subagent' "$TARGET_DIR/statusline.sh"
+  settings_merge '.subagentStatusLine = {"type": "command", "command": $command}' \
+    --arg command "$command"
+  printf 'Updated %s (subagent panel rows enabled)\n' "$SETTINGS_FILE"
+}
+
+disable_subagent_statusline() {
+  [ -s "$SETTINGS_FILE" ] || return 0
+  settings_merge 'del(.subagentStatusLine)'
+  printf 'Updated %s (subagent panel rows disabled)\n' "$SETTINGS_FILE"
+}
+
+verify_subagent_render() {  # preview the panel-row bodies with the user's theme
+  # startTime is minted relative to now so the preview exercises the elapsed
+  # segment too (a canned past date would render a huge, alarming duration).
+  local statusline input
+  statusline=$(runtime_statusline)
+  input=$(mktemp "${TMPDIR:-/tmp}/coralline-subinput.XXXXXX") || exit 1
+  jq -n --argjson now "$(date +%s)" '{columns: 100, tasks: [
+    {id: "t1", name: "Explore", type: "Explore", status: "running",
+     model: "claude-haiku-4-5-20251001", contextWindowSize: 200000,
+     tokenCount: 42000, startTime: (($now - 120) * 1000)},
+    {id: "t2", name: "executor", type: "executor", status: "completed",
+     model: "claude-fable-5", contextWindowSize: 200000,
+     tokenCount: 155000, startTime: (($now - 45) * 1000)}
+  ]}' > "$input"
+  printf '\nSubagent panel preview (row bodies):\n'
+  CORALLINE_CONFIG="$CONFIG_FILE" bash "$statusline" --subagent < "$input" | jq -r '.content'
+  rm -f "$input"
+}
+
+offer_subagent_rows() {  # opt-in toggle; default answer = current state (no change)
+  local cur=n
+  subagent_enabled && cur=y
+  if yes_no "Render subagent panel rows in your coralline theme (Claude Code >= 2.1.205)" "$cur"; then
+    [ "$cur" = "y" ] || enable_subagent_statusline
+    verify_subagent_render
+  else
+    [ "$cur" = "n" ] || disable_subagent_statusline
+  fi
 }
 
 verify_render() {
@@ -1390,6 +1532,8 @@ for arg in "$@"; do
     --install) install_files; update_settings ;;
     --install-only) install_only=1; install_files; update_settings ;;
     --default) setup_mode="default" ;;
+    --subagent-rows=on)  enable_subagent_statusline;  verify_subagent_render; exit 0 ;;
+    --subagent-rows=off) disable_subagent_statusline; exit 0 ;;
     --import-p10k) setup_mode="import-p10k" ;;
     --wizard) setup_mode="wizard" ;;
     --help|-h) usage; exit 0 ;;
@@ -1408,5 +1552,9 @@ load_theme_choices
 main_menu
 write_final_config || exit 0
 verify_render
+case "$setup_mode" in
+  default|import-p10k) ;;  # no-menu modes require explicit --subagent-rows=on|off
+  *) offer_subagent_rows ;;
+esac
 printf '\n%sDone.%s Restart Claude Code or open a new session to see coralline.\n' "$T_GREEN" "$T_RESET"
 printf '%sReconfigure anytime with:%s\n  %sbash %s/configure.sh%s\n' "$T_DIM" "$T_RESET" "$T_CORAL" "$TARGET_DIR" "$T_RESET"
