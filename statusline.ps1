@@ -14,14 +14,14 @@ $SubagentMode = $args.Count -gt 0 -and [string]$args[0] -ceq '--subagent'
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 
-$StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$StrictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $InputStream = [Console]::OpenStandardInput()
 if ($SubagentMode) {
     # Read one byte beyond the limit before allocating a decoded string. This
     # distinguishes an exact-cap stream from a longer one without unbounded I/O.
     $inputCap = 4194304
-    $inputBytes = New-Object byte[] ($inputCap + 1)
+    $inputBytes = [byte[]]::new($inputCap + 1)
     $inputLength = 0
     try {
         while ($inputLength -lt $inputBytes.Length) {
@@ -33,13 +33,13 @@ if ($SubagentMode) {
         $rawInput = $StrictUtf8.GetString($inputBytes, 0, $inputLength)
     } catch { [Environment]::Exit(0) }
 } else {
-    $InputReader = New-Object System.IO.StreamReader($InputStream, $StrictUtf8, $false, 4096, $false)
+    $InputReader = [System.IO.StreamReader]::new($InputStream, $StrictUtf8, $false, 4096, $false)
     try { $rawInput = $InputReader.ReadToEnd() } catch { $rawInput = '' }
     $InputReader.Dispose()
 }
 
 $OutputStream = [Console]::OpenStandardOutput()
-$OutputWriter = New-Object System.IO.StreamWriter($OutputStream, $Utf8NoBom, 4096, $false)
+$OutputWriter = [System.IO.StreamWriter]::new($OutputStream, $Utf8NoBom, 4096, $false)
 $OutputWriter.NewLine = "`n"
 $OutputWriter.AutoFlush = $true
 $OutputEncoding = $Utf8NoBom
@@ -102,6 +102,7 @@ $Defaults = [ordered]@{
     VL_BAR_EMPTY = (Glyph 0x25B1)
     VL_CTX_GLYPH = (Glyph 0x2B21)
     VL_PROJECT_GLYPH = (Glyph 0x2B22)
+    VL_CACHE_GLYPH = (Glyph 0x26C1)
     VL_CLOCK = '12h'
     VL_CLOCK_SECONDS = '1'
     VL_PATH_DEPTH = '4'
@@ -123,6 +124,7 @@ $Defaults = [ordered]@{
     VL_BG_SUB_MODEL = ''
     VL_BG_SUB_CTX = ''
     VL_BG_SUB_ELAPSED = ''
+    VL_BG_SUB_EFFORT = ''
     VL_FG_SUB_TEXT = ''
     VL_FG_SUB_OK = ''
     VL_FG_SUB_HOT = ''
@@ -140,6 +142,7 @@ $Defaults = [ordered]@{
     VL_BG_BURN = ''
     BURN_FILE = $DefaultBurnFile
     BURN_TRIM = '1500'
+    BURN_SLACK = '500'
     VL_LIMIT_SYNC = '0'
     RL5H_FILE = $DefaultRl5File
     RL7D_FILE = $DefaultRl7File
@@ -167,6 +170,7 @@ $Defaults = [ordered]@{
     VL_BG_EFFORT = '141'
     VL_BG_NODE = ''
     VL_BG_PYTHON = ''
+    VL_BG_CACHE = ''
     VL_BG_BAR = ''
     VL_NODE_GLYPH = (Glyph 0xE718)
     VL_PY_GLYPH = (Glyph 0xE73C)
@@ -179,9 +183,9 @@ $Defaults = [ordered]@{
     VL_FG_HOT = '167'
 }
 
-$PathConfigKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$PathConfigKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($key in @('VL_FLOAT_FILE', 'BURN_FILE', 'RL5H_FILE', 'RL7D_FILE')) { [void]$PathConfigKeys.Add($key) }
-$ConfigKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$ConfigKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($key in $Defaults.Keys) { [void]$ConfigKeys.Add([string]$key) }
 
 function Add-Utf8Text([System.Collections.Generic.List[byte]]$Bytes, [string]$Text) {
@@ -205,9 +209,26 @@ function Read-WordChar([string]$Text, [ref]$Index) {
     return $piece
 }
 
+# Characters that end a run of literal word text in each quoting context. Decoding a
+# whole run with one strict GetBytes call is exactly the per-character Read-WordChar
+# plus Add-Utf8Text loop: both fail on an unpaired surrogate and on nothing else, and
+# no stop character is a surrogate, so a run never splits a pair. It exists because a
+# PowerShell 5.1 function call costs ~40 us (measured), and the per-character loop
+# made two per config character: 940 calls per render on a themed config.
+$ShellWordStops = [char[]]@(' ', "`t", "'", '"', '$', '\', '`', ';', '|', '&', '<', '>', '(', ')')
+$ShellDoubleQuoteStops = [char[]]@('"', '\', '$', '`')
+$ShellAnsiQuoteStops = [char[]]@("'", '\')
+
+function Add-Utf8Run([System.Collections.Generic.List[byte]]$Bytes, [string]$Text, [int]$Start, [int]$End) {
+    try {
+        $Bytes.AddRange($StrictUtf8.GetBytes($Text.Substring($Start, $End - $Start)))
+        return $true
+    } catch { return $false }
+}
+
 function Decode-ShellWord([string]$Text, [bool]$PathContext) {
     if ($null -eq $Text) { return [pscustomobject]@{ Success = $false; Value = '' } }
-    $bytes = New-Object 'System.Collections.Generic.List[byte]'
+    $bytes = [System.Collections.Generic.List[byte]]::new()
     $i = 0
     $started = $false
 
@@ -227,16 +248,10 @@ function Decode-ShellWord([string]$Text, [bool]$PathContext) {
 
         if ($ch -eq "'") {
             $i++
-            $closed = $false
-            while ($i -lt $Text.Length) {
-                if ($Text[$i] -eq "'") { $i++; $closed = $true; break }
-                $ri = [ref]$i
-                $piece = Read-WordChar $Text $ri
-                if ($null -eq $piece) { return [pscustomobject]@{ Success = $false; Value = '' } }
-                $i = $ri.Value
-                if (-not (Add-Utf8Text $bytes $piece)) { return [pscustomobject]@{ Success = $false; Value = '' } }
-            }
-            if (-not $closed) { return [pscustomobject]@{ Success = $false; Value = '' } }
+            $close = $Text.IndexOf("'", $i)
+            if ($close -lt 0) { return [pscustomobject]@{ Success = $false; Value = '' } }
+            if (-not (Add-Utf8Run $bytes $Text $i $close)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+            $i = $close + 1
             continue
         }
 
@@ -278,11 +293,10 @@ function Decode-ShellWord([string]$Text, [bool]$PathContext) {
                     continue
                 }
                 if ($ch -eq '`') { return [pscustomobject]@{ Success = $false; Value = '' } }
-                $ri = [ref]$i
-                $piece = Read-WordChar $Text $ri
-                if ($null -eq $piece) { return [pscustomobject]@{ Success = $false; Value = '' } }
-                $i = $ri.Value
-                if (-not (Add-Utf8Text $bytes $piece)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+                $stop = $Text.IndexOfAny($ShellDoubleQuoteStops, $i)
+                if ($stop -lt 0) { return [pscustomobject]@{ Success = $false; Value = '' } }
+                if (-not (Add-Utf8Run $bytes $Text $i $stop)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+                $i = $stop
             }
             if (-not $closed) { return [pscustomobject]@{ Success = $false; Value = '' } }
             continue
@@ -295,11 +309,10 @@ function Decode-ShellWord([string]$Text, [bool]$PathContext) {
                 $ch = $Text[$i]
                 if ($ch -eq "'") { $i++; $closed = $true; break }
                 if ($ch -ne '\') {
-                    $ri = [ref]$i
-                    $piece = Read-WordChar $Text $ri
-                    if ($null -eq $piece) { return [pscustomobject]@{ Success = $false; Value = '' } }
-                    $i = $ri.Value
-                    if (-not (Add-Utf8Text $bytes $piece)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+                    $stop = $Text.IndexOfAny($ShellAnsiQuoteStops, $i)
+                    if ($stop -lt 0) { return [pscustomobject]@{ Success = $false; Value = '' } }
+                    if (-not (Add-Utf8Run $bytes $Text $i $stop)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+                    $i = $stop
                     continue
                 }
 
@@ -390,11 +403,10 @@ function Decode-ShellWord([string]$Text, [bool]$PathContext) {
             return [pscustomobject]@{ Success = $false; Value = '' }
         }
 
-        $ri = [ref]$i
-        $piece = Read-WordChar $Text $ri
-        if ($null -eq $piece) { return [pscustomobject]@{ Success = $false; Value = '' } }
-        $i = $ri.Value
-        if (-not (Add-Utf8Text $bytes $piece)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+        $stop = $Text.IndexOfAny($ShellWordStops, $i)
+        if ($stop -lt 0) { $stop = $Text.Length }
+        if (-not (Add-Utf8Run $bytes $Text $i $stop)) { return [pscustomobject]@{ Success = $false; Value = '' } }
+        $i = $stop
     }
 
     if (-not $started) { return [pscustomobject]@{ Success = $false; Value = '' } }
@@ -501,7 +513,7 @@ function Read-StrictUtf8File([string]$Path) {
     try {
         $attrs = [System.IO.File]::GetAttributes($Path)
         if (($attrs -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or ($attrs -band [System.IO.FileAttributes]::Directory) -ne 0) { return $null }
-        $info = New-Object System.IO.FileInfo($Path)
+        $info = [System.IO.FileInfo]::new($Path)
         if ($info.Length -gt 1048576) { return $null }
         $bytes = [System.IO.File]::ReadAllBytes($Path)
         $text = $StrictUtf8.GetString($bytes)
@@ -527,10 +539,10 @@ function Import-ConfigFile(
     if ($null -eq $text) { return $failed }
 
     $candidate = Copy-Config $BaseConfig
-    $candidateAssignments = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    $candidateAssignments = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($assignedName in $BaseAssignments) { [void]$candidateAssignments.Add($assignedName) }
     $rootFloatAuthorized = $false
-    $stack = New-Object System.Collections.ArrayList
+    $stack = [System.Collections.ArrayList]::new()
     $active = $true
     $valid = $true
     $lines = [regex]::Split($text, "`r`n|`n|`r")
@@ -633,7 +645,7 @@ function Import-ConfigFile(
 }
 
 $Cfg = Copy-Config $Defaults
-$ConfigAssignments = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$ConfigAssignments = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $FloatFileRootAuthorized = $false
 $ConfigInput = [string]$env:CORALLINE_CONFIG
 if ([string]::IsNullOrEmpty($ConfigInput)) { $ConfigInput = [System.IO.Path]::Combine($HomeDir, '.claude\coralline.conf') }
@@ -643,7 +655,7 @@ if (-not [string]::IsNullOrEmpty($ConfigPath)) {
     $ThemesRoot = ConvertTo-LocalFullPath ([System.IO.Path]::Combine($ScriptDir, 'themes')) $ScriptDir
     $approved = @($ConfigRoot)
     if (-not [string]::IsNullOrEmpty($ThemesRoot)) { $approved += $ThemesRoot }
-    $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $state = @{ IncludeCount = 0; Visited = $visited }
     $parsed = Import-ConfigFile $ConfigPath $Cfg $ConfigAssignments $state 0 $approved
     if ($parsed.Success) {
@@ -657,16 +669,20 @@ if ($null -ne $visited) {
     foreach ($visitedPath in $visited) { $ConfigVisitedPaths += [string]$visitedPath }
 }
 
-# Config never supplies terminal controls. The renderer is the sole ANSI source.
-foreach ($key in @($Cfg.Keys)) { $Cfg[$key] = Remove-ControlChars ([string]$Cfg[$key]) }
-
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $IntegerStyle = [System.Globalization.NumberStyles]::Integer
 $FloatStyle = [System.Globalization.NumberStyles]::Float
 
-function Get-BoundedInt([string]$Raw, [int]$Fallback, [int]$Min, [int]$Max) {
-    $value = 0
-    if (-not [int]::TryParse($Raw, $IntegerStyle, $Invariant, [ref]$value)) { return $Fallback }
+# Canonical integer-knob parse (mirrors Bash's knob_bounded): the raw value
+# must match \A[0-9]{1,MaxLen}\z (no sign, no whitespace, no exponent — a
+# digits-only check, not TryParse, which accepts all of those under
+# NumberStyles.Integer) and must lie in [Min, Max]; anything else takes the
+# fallback. Leading zeros are read as decimal, never octal.
+function Get-BoundedInt([string]$Raw, [int]$Fallback, [int]$Min, [int]$Max, [int]$MaxLen) {
+    # \A and \z, not ^ and $: .NET's $ also matches before a final newline, so
+    # $'9\n' would pass and parse as 9 while Bash falls back.
+    if ($null -eq $Raw -or $Raw -notmatch "\A[0-9]{1,$MaxLen}\z") { return $Fallback }
+    $value = [int]::Parse($Raw, $IntegerStyle, $Invariant)
     if ($value -lt $Min -or $value -gt $Max) { return $Fallback }
     return $value
 }
@@ -696,18 +712,27 @@ function Test-Color([string]$Spec) {
     return $false
 }
 
-$Cfg.VL_BAR_WIDTH = [string](Get-BoundedInt $Cfg.VL_BAR_WIDTH ([int]$Defaults.VL_BAR_WIDTH) 0 64)
-$Cfg.VL_PATH_DEPTH = [string](Get-BoundedInt $Cfg.VL_PATH_DEPTH ([int]$Defaults.VL_PATH_DEPTH) 1 256)
-$Cfg.VL_NAME_MAX = [string](Get-BoundedInt $Cfg.VL_NAME_MAX ([int]$Defaults.VL_NAME_MAX) 0 4096)
-$Cfg.VL_COST_DECIMALS = [string](Get-BoundedInt $Cfg.VL_COST_DECIMALS ([int]$Defaults.VL_COST_DECIMALS) 0 9)
-$Cfg.VL_WARN_PCT = [string](Get-BoundedInt $Cfg.VL_WARN_PCT ([int]$Defaults.VL_WARN_PCT) 0 100)
-$Cfg.VL_HOT_PCT = [string](Get-BoundedInt $Cfg.VL_HOT_PCT ([int]$Defaults.VL_HOT_PCT) 0 100)
-$Cfg.VL_MAX_LINES = [string](Get-BoundedInt $Cfg.VL_MAX_LINES ([int]$Defaults.VL_MAX_LINES) 1 64)
-$Cfg.VL_WRAP_MARGIN = [string](Get-BoundedInt $Cfg.VL_WRAP_MARGIN ([int]$Defaults.VL_WRAP_MARGIN) 0 32767)
+$Cfg.VL_BAR_WIDTH = [string](Get-BoundedInt $Cfg.VL_BAR_WIDTH ([int]$Defaults.VL_BAR_WIDTH) 0 64 2)
+$Cfg.VL_PATH_DEPTH = [string](Get-BoundedInt $Cfg.VL_PATH_DEPTH ([int]$Defaults.VL_PATH_DEPTH) 1 256 3)
+$Cfg.VL_NAME_MAX = [string](Get-BoundedInt $Cfg.VL_NAME_MAX ([int]$Defaults.VL_NAME_MAX) 0 4096 4)
+$Cfg.VL_COST_DECIMALS = [string](Get-BoundedInt $Cfg.VL_COST_DECIMALS ([int]$Defaults.VL_COST_DECIMALS) 0 9 1)
+$Cfg.VL_WARN_PCT = [string](Get-BoundedInt $Cfg.VL_WARN_PCT ([int]$Defaults.VL_WARN_PCT) 0 100 3)
+$Cfg.VL_HOT_PCT = [string](Get-BoundedInt $Cfg.VL_HOT_PCT ([int]$Defaults.VL_HOT_PCT) 0 100 3)
+$Cfg.VL_MAX_LINES = [string](Get-BoundedInt $Cfg.VL_MAX_LINES ([int]$Defaults.VL_MAX_LINES) 1 64 2)
+$Cfg.VL_WRAP_MARGIN = [string](Get-BoundedInt $Cfg.VL_WRAP_MARGIN ([int]$Defaults.VL_WRAP_MARGIN) 0 32767 5)
+$Cfg.CORALLINE_BURN_WINDOW = [string](Get-BoundedInt $Cfg.CORALLINE_BURN_WINDOW 600 60 86400 5)
+$Cfg.BURN_TRIM = [string](Get-BoundedInt $Cfg.BURN_TRIM 1500 1 3000 4)
+$Cfg.BURN_SLACK = [string](Get-BoundedInt $Cfg.BURN_SLACK 500 0 1000 4)
 if ([int]$Cfg.VL_HOT_PCT -lt [int]$Cfg.VL_WARN_PCT) {
     $Cfg.VL_WARN_PCT = $Defaults.VL_WARN_PCT
     $Cfg.VL_HOT_PCT = $Defaults.VL_HOT_PCT
 }
+
+# Config never supplies terminal controls. The renderer is the sole ANSI source.
+# This runs after the integer knobs above are validated, so a value such as
+# $'9\r' is refused as Bash's knob_bounded refuses it, instead of being
+# stripped to 9 first.
+foreach ($key in @($Cfg.Keys)) { $Cfg[$key] = Remove-ControlChars ([string]$Cfg[$key]) }
 foreach ($key in @($Cfg.Keys | Where-Object { $_ -like 'VL_BG_*' -or $_ -like 'VL_FG_*' })) {
     if (-not (Test-Color $Cfg[$key])) { $Cfg[$key] = $Defaults[$key] }
 }
@@ -833,7 +858,7 @@ function New-Bar([int]$Pct, [int]$Width) {
     $filled = [int][math]::Floor(($Pct * $Width + 50) / 100)
     if ($filled -lt 0) { $filled = 0 }
     if ($filled -gt $Width) { $filled = $Width }
-    $sb = New-Object System.Text.StringBuilder
+    $sb = [System.Text.StringBuilder]::new()
     for ($i = 0; $i -lt $filled; $i++) { [void]$sb.Append($Cfg.VL_BAR_FILL) }
     for ($i = $filled; $i -lt $Width; $i++) { [void]$sb.Append($Cfg.VL_BAR_EMPTY) }
     return $sb.ToString()
@@ -879,7 +904,7 @@ function Get-PctFg([int]$Pct) {
 function Get-Trunc([string]$S, [int]$Max) {
     if ($null -eq $S) { return '' }
     if ($Max -le 0) { return $S }
-    $offsets = New-Object 'System.Collections.Generic.List[int]'
+    $offsets = [System.Collections.Generic.List[int]]::new()
     for ($i = 0; $i -lt $S.Length) {
         [void]$offsets.Add($i)
         if ([char]::IsHighSurrogate($S[$i]) -and ($i + 1) -lt $S.Length -and [char]::IsLowSurrogate($S[$i + 1])) { $i += 2 }
@@ -916,7 +941,7 @@ function Read-StrictJsonString([hashtable]$State) {
         return $null
     }
     $State.Index++
-    $builder = New-Object System.Text.StringBuilder
+    $builder = [System.Text.StringBuilder]::new()
     :jsonStringCharacters while ($State.Index -lt $State.Text.Length) {
         $ch = $State.Text[$State.Index]
         $State.Index++
@@ -1027,8 +1052,8 @@ function Read-StrictJsonValueStart(
     if ($ch -eq '{') {
         if ($Stack.Count -ge 128) { $State.Valid = $false; return $null }
         $State.Index++
-        $members = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
-        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $members = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $node = New-StrictJsonNode 'object' $members
         [void]$Stack.Add([pscustomobject]@{ Type='object'; State='keyOrEnd'; Node=$node; Seen=$seen; Key='' })
         return $node
@@ -1036,7 +1061,7 @@ function Read-StrictJsonValueStart(
     if ($ch -eq '[') {
         if ($Stack.Count -ge 128) { $State.Valid = $false; return $null }
         $State.Index++
-        $items = New-Object 'System.Collections.Generic.List[object]'
+        $items = [System.Collections.Generic.List[object]]::new()
         $node = New-StrictJsonNode 'array' $items
         [void]$Stack.Add([pscustomobject]@{ Type='array'; State='valueOrEnd'; Node=$node })
         return $node
@@ -1063,7 +1088,7 @@ function Read-StrictJsonValueStart(
 }
 
 function Read-StrictJsonValue([hashtable]$State) {
-    $stack = New-Object 'System.Collections.Generic.List[object]'
+    $stack = [System.Collections.Generic.List[object]]::new()
     $root = Read-StrictJsonValueStart $State $stack
     if (-not $State.Valid) { return $null }
     while ($stack.Count -gt 0 -and $State.Valid) {
@@ -1243,7 +1268,7 @@ function Convert-StrictJsonScalar($Node, [int]$ByteCap) {
 }
 
 function ConvertTo-StrictJsonString([string]$Value) {
-    $builder = New-Object System.Text.StringBuilder
+    $builder = [System.Text.StringBuilder]::new()
     [void]$builder.Append('"')
     :jsonEscapeCharacters for ($i = 0; $i -lt $Value.Length; $i++) {
         $ch = $Value[$i]
@@ -1270,12 +1295,12 @@ function ConvertTo-StrictJsonString([string]$Value) {
 function Read-BoundedStrictUtf8RegularFile([string]$Path, [int]$ByteCap) {
     if (-not (Test-SafeRegularFile $Path)) { return $null }
     try {
-        $info = New-Object System.IO.FileInfo($Path)
+        $info = [System.IO.FileInfo]::new($Path)
         if ($info.Length -gt $ByteCap) { return $null }
         $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
         $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
         try {
-            $bytes = New-Object byte[] ($ByteCap + 1)
+            $bytes = [byte[]]::new($ByteCap + 1)
             $length = 0
             while ($length -lt $bytes.Length) {
                 $read = $stream.Read($bytes, $length, $bytes.Length - $length)
@@ -1319,6 +1344,46 @@ function Get-SubagentSidecarPath([string]$Transcript, [string]$Id) {
     return $candidate
 }
 
+function Get-SubagentEffort([string]$Transcript, [string]$Id) {
+    # Mirrors subagent_effort in statusline.sh: the effort Claude Code recorded on
+    # the first assistant line of the task transcript, which sits beside the
+    # validated sidecar. Only newline-terminated lines count, as with Bash `read`.
+    # ponytail: reads a 1 MiB prefix; the first assistant line was within 200 KB
+    # on every measured transcript, raise the cap if that stops holding.
+    $sidecar = Get-SubagentSidecarPath $Transcript $Id
+    if ([string]::IsNullOrEmpty($sidecar)) { return '' }
+    $path = $sidecar.Substring(0, $sidecar.Length - 10) + '.jsonl'
+    if (-not (Test-SafeRegularFile $path)) { return '' }
+    $bytes = [byte[]]::new(1048576)
+    $length = 0
+    try {
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        try {
+            while ($length -lt $bytes.Length) {
+                $read = $stream.Read($bytes, $length, $bytes.Length - $length)
+                if ($read -le 0) { break }
+                $length += $read
+            }
+        } finally { $stream.Dispose() }
+    } catch { return '' }
+    $lines = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $length).Split([char]10)
+    $max = [Math]::Min(64, $lines.Count - 1)
+    for ($i = 0; $i -lt $max; $i++) {
+        $line = $lines[$i]
+        if (-not $line.Contains('"type":"assistant"')) { continue }
+        $anchor = $line.IndexOf('","perTurnEffort":', [System.StringComparison]::Ordinal)
+        if ($anchor -lt 0) { return '' }
+        $head = $line.Substring(0, $anchor)
+        $key = $head.LastIndexOf('"effort":"', [System.StringComparison]::Ordinal)
+        if ($key -lt 0) { return '' }
+        $level = $head.Substring($key + 10)
+        if ($level -ceq 'low' -or $level -ceq 'medium' -or $level -ceq 'high' -or $level -ceq 'xhigh' -or $level -ceq 'max') { return $level }
+        return ''
+    }
+    return ''
+}
+
 function Get-SubagentRole([string]$Transcript, [string]$Id) {
     $path = Get-SubagentSidecarPath $Transcript $Id
     if ([string]::IsNullOrEmpty($path)) { return '' }
@@ -1334,6 +1399,8 @@ function Get-SubagentRole([string]$Transcript, [string]$Id) {
 function Get-SubagentModelShort([string]$Model) {
     if (-not $Model.StartsWith('claude-', [System.StringComparison]::Ordinal)) { return $Model }
     $value = $Model.Substring(7)
+    # Context suffix, e.g. claude-opus-5-5[1m]; mirrors model_short in statusline.sh.
+    if ($value.EndsWith(']', [System.StringComparison]::Ordinal) -and $value.LastIndexOf('[') -ge 0) { $value = $value.Substring(0, $value.LastIndexOf('[')) }
     if ($value -match '-[0-9]{8}\z') { $value = $value.Substring(0, $value.Length - 9) }
     $dash = $value.IndexOf('-')
     if ($dash -le 0 -or $dash -ge ($value.Length - 1)) { return $Model }
@@ -1471,7 +1538,7 @@ function Invoke-SubagentMode([string]$InputText) {
     $transcript = ''
     if ($transcriptResult.Valid -and $transcriptResult.Value.Length -le 4096) { $transcript = [string]$transcriptResult.Value }
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines = [System.Collections.Generic.List[string]]::new()
 
     foreach ($task in $tasks.Value) {
         if ($null -eq $task -or $task.Kind -cne 'object') { continue }
@@ -1485,8 +1552,8 @@ function Invoke-SubagentMode([string]$InputText) {
         }
         $role = ''
         if ($fields.type -ceq 'local_agent') { $role = Get-SubagentRole $transcript $id }
-        $backgrounds = New-Object 'System.Collections.Generic.List[string]'
-        $texts = New-Object 'System.Collections.Generic.List[string]'
+        $backgrounds = [System.Collections.Generic.List[string]]::new()
+        $texts = [System.Collections.Generic.List[string]]::new()
         $segmentList = [string]$Cfg.VL_SUB_SEGMENTS
         $segmentNames = @()
         if (-not [string]::IsNullOrWhiteSpace($segmentList)) { $segmentNames = @([regex]::Split($segmentList.Trim(), '\s+')) }
@@ -1529,6 +1596,15 @@ function Invoke-SubagentMode([string]$InputText) {
                     if ([string]::IsNullOrEmpty($fields.model)) { break }
                     $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_MODEL)) { $Cfg.VL_BG_MODEL } else { $Cfg.VL_BG_SUB_MODEL }
                     Add-SubagentSegment $backgrounds $texts $background ($Bold + (Get-Fg $Cfg.VL_FG_TEXT) + ' ' + $G.Diamond + ' ' + (Get-SubagentModelShort $fields.model) + ' ' + $Norm)
+                    break
+                }
+                'effort' {
+                    if ($fields.type -cne 'local_agent') { break }
+                    $level = Get-SubagentEffort $transcript $id
+                    if ([string]::IsNullOrEmpty($level)) { break }
+                    if ($level -ceq 'medium') { $level = 'med' }
+                    $background = if ([string]::IsNullOrEmpty([string]$Cfg.VL_BG_SUB_EFFORT)) { $Cfg.VL_BG_EFFORT } else { $Cfg.VL_BG_SUB_EFFORT }
+                    Add-SubagentSegment $backgrounds $texts $background ((Get-Fg $Cfg.VL_FG_TEXT) + ' ' + $G.Psi + ' ' + $level + ' ')
                     break
                 }
                 'ctx' {
@@ -1738,7 +1814,7 @@ function ConvertFrom-LimitName([string]$Name, [long]$NowValue, [long]$MaxAhead) 
 }
 
 function Get-StateDirectorySnapshot([string]$Root, [int]$Cap, [long]$NowValue, [long]$MaxAhead) {
-    $entries = New-Object 'System.Collections.Generic.List[object]'
+    $entries = [System.Collections.Generic.List[object]]::new()
     if (-not (Test-StateRoot $Root)) { return [pscustomobject]@{ Complete=$false; Raw=0; Entries=@() } }
     if (-not [IO.Directory]::Exists($Root)) { return [pscustomobject]@{ Complete=$true; Raw=0; Entries=@() } }
     $raw = 0
@@ -1766,23 +1842,6 @@ function Get-StateDirectorySnapshot([string]$Root, [int]$Cap, [long]$NowValue, [
     } catch { return [pscustomobject]@{ Complete=$false; Raw=$raw; Entries=@() } }
     finally { if ($null -ne $enumerator) { $enumerator.Dispose() } }
     return [pscustomobject]@{ Complete=$true; Raw=$raw; Entries=$entries.ToArray() }
-}
-
-function ConvertFrom-BurnRecord([string]$Record, [long]$NowValue) {
-    $fields = $Record.Split(@("`t"), [StringSplitOptions]::None)
-    if ($fields.Length -ne 3) { return $null }
-    $sampleValue = ConvertTo-StateEpoch $fields[0] 12
-    $pct = ConvertTo-StatePct $fields[1]
-    if ($null -eq $pct) {
-        $canonical = ConvertFrom-CanonicalStatePct $fields[1]
-        if ($null -ne $canonical) { $pct = [pscustomobject]@{ Milli=[int]$canonical } }
-    }
-    $resetValue = ConvertTo-StateEpoch $fields[2] 12
-    if ($null -eq $sampleValue -or $null -eq $pct -or $null -eq $resetValue) { return $null }
-    $sample = [long]$sampleValue.Value
-    $reset = [long]$resetValue.Value
-    $plausible = $sample -le ($NowValue + 300L) -and $reset -ge $sample -and $reset -le ($NowValue + 21600L)
-    return [pscustomobject]@{ Reset=$reset; Sample=$sample; Pct=[int]$pct.Milli; Plausible=$plausible }
 }
 
 # A killed render dies before its finally block, leaving the trim temporary (or the
@@ -1835,14 +1894,12 @@ function Write-BurnState([string]$Path, [object[]]$Rows, [bool]$Mutate) {
     if (-not (Test-NoReparseComponents $parent) -or -not [IO.Directory]::Exists($parent)) { return $false }
     if ((Test-StateObjectExists $Path) -and -not (Test-StateRegularFile $Path)) { return $false }
 
-    $builder = New-Object Text.StringBuilder
+    # Rows are [long[]] (reset, sample, pct milli), as Read-BurnState builds them.
+    $builder = [Text.StringBuilder]::new()
+    $fraction = 0L
     foreach ($row in @($Rows)) {
-        [void]$builder.Append(([long]$row.Sample).ToString($Invariant))
-        [void]$builder.Append("`t")
-        [void]$builder.Append((Format-BurnPct ([int]$row.Pct)))
-        [void]$builder.Append("`t")
-        [void]$builder.Append(([long]$row.Reset).ToString($Invariant))
-        [void]$builder.Append("`n")
+        $whole = [Math]::DivRem($row[2], 1000L, [ref]$fraction)
+        [void]$builder.AppendFormat($Invariant, "{0}`t{1}.{2:000}`t{3}`n", $row[1], $whole, $fraction, $row[0])
     }
     $temp = ''
     $backup = ''
@@ -1852,7 +1909,7 @@ function Write-BurnState([string]$Path, [object[]]$Rows, [bool]$Mutate) {
             if ($candidate.Length -gt 4096) { return $false }
             $stream = $null
             try {
-                $stream = New-Object IO.FileStream($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
+                $stream = [IO.FileStream]::new($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
                 $bytes = $Utf8NoBom.GetBytes($builder.ToString())
                 if ($bytes.Length -gt 0) { $stream.Write($bytes, 0, $bytes.Length) }
                 $stream.Flush($true)
@@ -1895,7 +1952,29 @@ function Write-BurnState([string]$Path, [object[]]$Rows, [bool]$Mutate) {
     }
 }
 
-function Read-BurnState([string]$Path, [long]$NowValue, [int]$Trim, [bool]$Mutate) {
+# One validated burn row, whole-line anchored. The sample and reset are canonical
+# decimal epochs; the pct is either a payload-shaped value (up to six decimals,
+# rounded half-even to milli-percent) or the zero-padded canonical form. The
+# pattern only admits tab, dot and ASCII digits, so a row with any other byte is
+# skipped, as the previous byte loop did. A CR-terminated row is skipped too, like
+# awk on Linux and macOS; Git Bash's awk strips that CR and keeps the row (measured),
+# a divergence neither writer can produce, since both emit LF only.
+$BurnRowPattern = [regex]::new('^(0|[1-9][0-9]{0,11})\t(?:(0|[1-9][0-9]?|100)(?:\.([0-9]{1,6}))?|(0[0-9]{2}|100)\.([0-9]{3}))\t(0|[1-9][0-9]{0,11})$', ([Text.RegularExpressions.RegexOptions]::Multiline -bor [Text.RegularExpressions.RegexOptions]::CultureInvariant))
+# Anchored at line starts so each line is scanned once. Unanchored, every offset of
+# a long line restarts the 4097-char run: on PS 5.1, IsMatch over 255 lines of 4096
+# bytes took 3939 ms unanchored and 117 ms anchored, with identical results on the
+# 4096/4097 boundaries.
+$BurnLongRecordPattern = [regex]::new('^[^\n]{4097}', ([Text.RegularExpressions.RegexOptions]::Multiline -bor [Text.RegularExpressions.RegexOptions]::CultureInvariant))
+$Latin1 = [Text.Encoding]::GetEncoding(28591)
+
+# The reader parses at most the newest 4096 physical rows, as the Bash reader does.
+# A store holding more used to be refused outright and so was never trimmed again:
+# a render cancelled after its append but before its trim leaves one row behind,
+# and with a render slower than a 1 s refresh that happens on every tick. It is now
+# read from its tail and, on a mutating render, rewritten to its newest BURN_TRIM
+# rows, because physical then exceeds any BURN_TRIM + BURN_SLACK. The 1 MiB and
+# 4096-byte record caps still refuse the whole file, unrewritten.
+function Read-BurnState([string]$Path, [long]$NowValue, [int]$Trim, [int]$Slack, [bool]$Mutate) {
     if (-not [IO.File]::Exists($Path)) {
         if (Test-StateObjectExists $Path) { return [pscustomobject]@{ Complete=$false; Exists=$false; Raw=0; Rows=@() } }
         if (Test-NoReparseComponents $Path) { return [pscustomobject]@{ Complete=$true; Exists=$false; Raw=0; Rows=@() } }
@@ -1910,90 +1989,83 @@ function Read-BurnState([string]$Path, [long]$NowValue, [int]$Trim, [bool]$Mutat
         try { $sweepParent = [IO.Path]::GetDirectoryName($Path) } catch { $sweepParent = $null }
         if (-not [string]::IsNullOrEmpty($sweepParent)) { Remove-BurnTemporaries $sweepParent $Path }
     }
-    $rows = New-Object 'System.Collections.Generic.List[object]'
-    $byKey = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
-    $physical = 0
-    $heal = $false
-    $lastByte = -1
+    $incomplete = [pscustomobject]@{ Complete=$false; Exists=$true; Raw=0; Rows=@() }
     $stream = $null
+    $bytes = $null
     try {
         $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
-        $stream = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share, 4096, [IO.FileOptions]::SequentialScan)
+        $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share, 4096, [IO.FileOptions]::SequentialScan)
         $length = [long]$stream.Length
-        if ($length -gt 1048576L) { return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=0; Rows=@() } }
-        $buffer = New-Object byte[] 4096
-        $builder = New-Object Text.StringBuilder
-        $remaining = $length
-        $recordLength = 0
-        $rowAscii = $true
-        while ($remaining -gt 0) {
-            $want = [int][Math]::Min([long]$buffer.Length, $remaining)
-            $read = $stream.Read($buffer, 0, $want)
-            if ($read -le 0) { return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=$physical; Rows=@() } }
-            $remaining -= $read
-            for ($i=0; $i -lt $read; $i++) {
-                $byte = [int]$buffer[$i]
-                $lastByte = $byte
-                if ($byte -eq 10) {
-                    $physical++
-                    if ($physical -gt 4096) { return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=$physical; Rows=@() } }
-                    if ($rowAscii) {
-                        $row = ConvertFrom-BurnRecord $builder.ToString() $NowValue
-                        if ($null -ne $row) {
-                            if (-not $row.Plausible) { $heal = $true }
-                            else {
-                                $key = ([string]$row.Reset) + '_' + ([string]$row.Sample)
-                                if ($byKey.ContainsKey($key)) {
-                                    $old = $byKey[$key]
-                                    if ($row.Pct -gt $old.Pct) { $old.Pct = [int]$row.Pct }
-                                } else {
-                                    $byKey[$key] = $row
-                                    [void]$rows.Add($row)
-                                }
-                            }
-                        }
-                    }
-                    [void]$builder.Clear(); $recordLength=0; $rowAscii=$true
-                    continue
-                }
-                $recordLength++
-                if ($recordLength -gt 4096) { return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=$physical; Rows=@() } }
-                if ($byte -eq 9 -or $byte -eq 46 -or ($byte -ge 48 -and $byte -le 57)) { [void]$builder.Append([char]$byte) }
-                else { $rowAscii=$false }
-            }
+        if ($length -gt 1048576L) { return $incomplete }
+        $bytes = [byte[]]::new($length)
+        $have = 0
+        while ($have -lt $length) {
+            $read = $stream.Read($bytes, $have, [int]($length - $have))
+            if ($read -le 0) { return $incomplete }
+            $have += $read
         }
-        if ($length -gt 0 -and $lastByte -ne 10 -and $length -ge 1048576L) {
-            return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=$physical; Rows=@() }
-        }
-        if ($recordLength -gt 0) {
-            $physical++
-            if ($physical -gt 4096) { return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=$physical; Rows=@() } }
-            if ($rowAscii) {
-                $row = ConvertFrom-BurnRecord $builder.ToString() $NowValue
-                if ($null -ne $row) {
-                    if (-not $row.Plausible) { $heal = $true }
-                    else {
-                        $key = ([string]$row.Reset) + '_' + ([string]$row.Sample)
-                        if ($byKey.ContainsKey($key)) {
-                            $old = $byKey[$key]
-                            if ($row.Pct -gt $old.Pct) { $old.Pct = [int]$row.Pct }
-                        } else {
-                            $byKey[$key] = $row
-                            [void]$rows.Add($row)
-                        }
-                    }
-                }
-            }
-        }
-    } catch { return [pscustomobject]@{ Complete=$false; Exists=$true; Raw=$physical; Rows=@() } }
+    } catch { return $incomplete }
     finally { if ($null -ne $stream) { $stream.Dispose() } }
+    if ($length -ge 1048576L -and $bytes[$length - 1] -ne 10) { return $incomplete }
+    # Latin-1 maps every byte to exactly one char, so lengths stay byte counts and
+    # no multi-byte sequence can decode into something the row pattern admits.
+    $text = $Latin1.GetString($bytes)
+    if ($BurnLongRecordPattern.IsMatch($text)) { return $incomplete }
+    $lines = $text.Split([char]10)
+    $physical = $lines.Length
+    if ($lines[$physical - 1].Length -eq 0) { $physical-- }
+    $first = [Math]::Max(0, $physical - 4096)
+    $tail = [string]::Join("`n", $lines, $first, $physical - $first)
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $byKey = [System.Collections.Generic.Dictionary[string,long[]]]::new([StringComparer]::Ordinal)
+    $heal = $false
+    $healAhead = $NowValue + 300L
+    $resetAhead = $NowValue + 21600L
+    # Rows are [long[]] (reset, sample, pct milli) rather than a pscustomobject each,
+    # and the three-decimal branch is the shape both writers emit: the general branch
+    # with no rounding digits, where pct > 100000 is exactly "whole = 100 with a
+    # nonzero fraction". Together measured 53 -> 38 ms for 1500 rows on PS 5.1.
+    foreach ($m in $BurnRowPattern.Matches($tail)) {
+        $g = $m.Groups
+        $sampleText = $g[1].Value
+        $resetText = $g[6].Value
+        $sample = [long]$sampleText
+        $reset = [long]$resetText
+        if ($sample -gt 253402300799L -or $reset -gt 253402300799L) { continue }
+        $fraction = $g[3].Value
+        if ($fraction.Length -eq 3) {
+            $pct = [int]$g[2].Value * 1000 + [int]$fraction
+            if ($pct -gt 100000) { continue }
+        } elseif ($g[2].Success) {
+            $whole = [int]$g[2].Value
+            if ($whole -eq 100 -and $fraction.Trim('0').Length -ne 0) { continue }
+            $six = ($fraction + '000000').Substring(0, 6)
+            $pct = $whole * 1000 + [int]$six.Substring(0, 3)
+            $rest = [int]$six.Substring(3, 3)
+            if ($rest -gt 500 -or ($rest -eq 500 -and ($pct % 2) -eq 1)) { $pct++ }
+        } else {
+            $pct = [int]$g[4].Value * 1000 + [int]$g[5].Value
+            if ($pct -gt 100000) { continue }
+        }
+        if ($sample -gt $healAhead -or $reset -lt $sample -or $reset -gt $resetAhead) { $heal = $true; continue }
+        $key = $resetText + '_' + $sampleText
+        $old = $null
+        if ($byKey.TryGetValue($key, [ref]$old)) {
+            if ($pct -gt $old[2]) { $old[2] = $pct }
+        } else {
+            $row = [long[]]@($reset, $sample, $pct)
+            $byKey[$key] = $row
+            [void]$rows.Add($row)
+        }
+    }
 
     $finalRows = $rows.ToArray()
-    if ($Mutate -and ($physical -gt $Trim -or $heal)) {
-        $retained = New-Object 'System.Collections.Generic.List[object]'
+    if ($Mutate -and ($physical -gt ($Trim + $Slack) -or $heal)) {
         $start = [Math]::Max(0, $finalRows.Length - $Trim)
-        for ($i=$start; $i -lt $finalRows.Length; $i++) { [void]$retained.Add($finalRows[$i]) }
-        [void](Write-BurnState $Path $retained.ToArray() $true)
+        $keep = [object[]]::new($finalRows.Length - $start)
+        [Array]::Copy($finalRows, $start, $keep, 0, $keep.Length)
+        [void](Write-BurnState $Path $keep $true)
     }
     return [pscustomobject]@{ Complete=$true; Exists=$true; Raw=$physical; Rows=$finalRows }
 }
@@ -2024,9 +2096,12 @@ function Append-BurnState([string]$Path, $Current, [bool]$Mutate) {
     for ($attempt = 0; $attempt -lt 64; $attempt++) {
         $stream = $null
         try {
-            $stream = New-Object IO.FileStream($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
             $stream.Write($bytes, 0, $bytes.Length)
-            $stream.Flush($true)
+            # Flush to the OS, not to the disk: Bash's >> append does not fsync
+            # either, and FlushFileBuffers measured ~4 ms per append on Windows,
+            # spent holding the exclusive handle concurrent sessions queue on.
+            $stream.Flush()
             return $true
         } catch [IO.IOException] {
             [Threading.Thread]::Sleep(1)
@@ -2040,7 +2115,7 @@ function Append-BurnState([string]$Path, $Current, [bool]$Mutate) {
 }
 
 function Sort-StateEntries([object[]]$Entries) {
-    $list = New-Object 'System.Collections.Generic.List[object]'
+    $list = [System.Collections.Generic.List[object]]::new()
     $list.AddRange($Entries)
     $comparison = [System.Comparison[object]]{
         param($left, $right)
@@ -2054,7 +2129,7 @@ function Get-LimitRetention([object[]]$Entries) {
     $sorted = Sort-StateEntries $Entries
     $winner = $null
     foreach ($entry in $sorted) { if ($entry.Plausible) { $winner = $entry } }
-    $candidates = New-Object 'System.Collections.Generic.List[object]'
+    $candidates = [System.Collections.Generic.List[object]]::new()
     foreach ($entry in $sorted) { if ($null -eq $winner -or -not [object]::ReferenceEquals($entry, $winner)) { [void]$candidates.Add($entry) } }
     return [pscustomobject]@{ Candidates=$candidates.ToArray(); Winner=$winner }
 }
@@ -2139,22 +2214,21 @@ function Publish-LimitState([string]$Root, $Current, $Snapshot, $Gc, [long]$MaxA
 function Get-Burn5Estimate($Snapshot, $Current, [long]$NowValue, [int]$Window) {
     $warming = [pscustomobject]@{ State='warming'; Eta='inf'; Rate='0.0000000000'; Ttr=0L }
     if (-not $Snapshot.Complete) { return $warming }
-    $observations = New-Object 'System.Collections.Generic.List[object]'
-    foreach ($row in $Snapshot.Rows) { [void]$observations.Add($row) }
-    if ($Current.Valid) { [void]$observations.Add($Current) }
-    if ($observations.Count -eq 0) { return $warming }
+    # Rows arrive deduplicated per (reset, sample) with their maximum pct, so only
+    # the current reading can repeat a key, and a per-second maximum absorbs it.
     $maxReset = 0L
-    foreach ($observation in $observations) { if ([long]$observation.Reset -gt $maxReset) { $maxReset = [long]$observation.Reset } }
+    foreach ($row in $Snapshot.Rows) { if ($row[0] -gt $maxReset) { $maxReset = $row[0] } }
+    if ($Current.Valid -and [long]$Current.Reset -gt $maxReset) { $maxReset = [long]$Current.Reset }
     if ($maxReset -le 0) { return $warming }
-    $dedup = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
-    $perSecond = New-Object 'System.Collections.Generic.Dictionary[long,int]'
-    foreach ($observation in $observations) {
-        if ([long]$observation.Reset -ne $maxReset) { continue }
-        $key = ([string]$observation.Reset) + '_' + ([string]$observation.Sample) + '_' + ([string]$observation.Pct)
-        if (-not $dedup.Add($key)) { continue }
-        $sample = [long]$observation.Sample
-        $pct = [int]$observation.Pct
-        if (-not $perSecond.ContainsKey($sample) -or $pct -gt $perSecond[$sample]) { $perSecond[$sample] = $pct }
+    $perSecond = [System.Collections.Generic.Dictionary[long,int]]::new()
+    $best = 0
+    foreach ($row in $Snapshot.Rows) {
+        if ($row[0] -ne $maxReset) { continue }
+        if (-not $perSecond.TryGetValue($row[1], [ref]$best) -or $row[2] -gt $best) { $perSecond[$row[1]] = [int]$row[2] }
+    }
+    if ($Current.Valid -and [long]$Current.Reset -eq $maxReset) {
+        $sample = [long]$Current.Sample
+        if (-not $perSecond.TryGetValue($sample, [ref]$best) -or [int]$Current.Pct -gt $best) { $perSecond[$sample] = [int]$Current.Pct }
     }
     if ($perSecond.Count -eq 0) { return $warming }
     $samples = [long[]]@($perSecond.Keys)
@@ -2214,8 +2288,9 @@ function Get-BurnBinding($Five, $Seven) {
 
 function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gate) {
     $mutate = [string]$env:CORALLINE_NO_SAMPLE -ne '1'
-    $window = Get-BoundedInt $Cfg.CORALLINE_BURN_WINDOW 600 60 86400
-    $trim = Get-BoundedInt $Cfg.BURN_TRIM 1500 1 3000
+    $window = Get-BoundedInt $Cfg.CORALLINE_BURN_WINDOW 600 60 86400 5
+    $trim = Get-BoundedInt $Cfg.BURN_TRIM 1500 1 3000 4
+    $slack = Get-BoundedInt $Cfg.BURN_SLACK 500 0 1000 4
     $current5 = Get-CurrentLimit $fhPct $fhRst $Now 21600L
     $current7 = Get-CurrentLimit $wdPct $wdRst $Now 691200L
     $currentBurn = [pscustomobject]@{ Valid=$false; Reset=0L; Sample=$Now; Pct=0 }
@@ -2248,7 +2323,7 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     # Measured on Windows for both shapes, sync enabled and sync disabled:
     # statusline.sh created nothing at all, statusline.ps1 created the file.
     $collision = $false
-    $namespace = New-Object 'System.Collections.Generic.List[string]'
+    $namespace = [System.Collections.Generic.List[string]]::new()
     foreach ($configured in @($Cfg.BURN_FILE, $Cfg.RL5H_FILE, $Cfg.RL7D_FILE)) {
         if ([string]::IsNullOrEmpty([string]$configured)) { continue }
         $candidate = Get-StatePaths $configured
@@ -2280,7 +2355,7 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     # Protected paths are compared against state paths only, never against each
     # other, so a repeated include cannot manufacture a collision.
     if (-not $collision) {
-        $protected = New-Object 'System.Collections.Generic.List[string]'
+        $protected = [System.Collections.Generic.List[string]]::new()
         $runtimePath = ''
         try { $runtimePath = [IO.Path]::GetFullPath($ScriptPath) } catch { }
         $floatTarget = ''
@@ -2302,7 +2377,7 @@ function Get-CorallineState([bool]$BurnGate, [bool]$Limit5Gate, [bool]$Limit7Gat
     if (-not $collision) {
         if ($BurnGate -and $null -ne $burnPaths) {
             [void](Append-BurnState $burnPaths.Base $currentBurn $mutate)
-            $burnSnapshot = Read-BurnState $burnPaths.Base $Now $trim $mutate
+            $burnSnapshot = Read-BurnState $burnPaths.Base $Now $trim $slack $mutate
         }
         if ($Limit5Gate -and $null -ne $limit5Paths) { $limit5Snapshot = Get-StateDirectorySnapshot $limit5Paths.Root 512 $Now 21600L }
         if ($Limit7Gate -and $null -ne $limit7Paths) { $limit7Snapshot = Get-StateDirectorySnapshot $limit7Paths.Root 512 $Now 691200L }
@@ -2472,6 +2547,24 @@ $fhPct = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits
 $fhRst = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits', 'five_hour', 'resets_at')))
 $wdPct = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits', 'seven_day', 'used_percentage')))
 $wdRst = Remove-ControlChars (To-InvariantString (Get-JsonPath $J @('rate_limits', 'seven_day', 'resets_at')))
+# prompt_cache is absent entirely until the session's first request, and either
+# field can be null after that. Both are accepted only as JSON numbers, mirroring
+# the Bash renderer's `type == "number"` guard, so a string or an object leaves the
+# segment suppressed rather than rendering a bogus gauge. hit_ratio arrives as a
+# 0..1 ratio and is scaled here, the way the Bash side scales it inside jq.
+$cacheHit = ''
+$cacheExp = ''
+$cacheParent = Get-JsonMember $J 'prompt_cache'
+if ($cacheParent -is [pscustomobject] -or $cacheParent -is [System.Collections.IDictionary]) {
+    $hitNode = Get-JsonMember $cacheParent 'hit_ratio'
+    if ($hitNode -is [double] -or $hitNode -is [decimal] -or $hitNode -is [long] -or $hitNode -is [int]) {
+        $cacheHit = To-InvariantString ([double]$hitNode * 100)
+    }
+    $expNode = Get-JsonMember $cacheParent 'expires_at'
+    if ($expNode -is [double] -or $expNode -is [decimal] -or $expNode -is [long] -or $expNode -is [int]) {
+        $cacheExp = To-InvariantString $expNode
+    }
+}
 $costParent = Get-JsonMember $J 'cost'
 $costNode = $null
 $costKind = 'missing'
@@ -2547,7 +2640,7 @@ function Get-DisplayPath([string]$Path) {
     if ($short -eq '/') { return '/' }
     if ($short -match '^[A-Za-z]:/?$') { return $short.Substring(0, 2) + '/' }
 
-    $parts = New-Object System.Collections.Generic.List[string]
+    $parts = [System.Collections.Generic.List[string]]::new()
     $prefix = ''
     if ($short.StartsWith('//', [System.StringComparison]::Ordinal)) {
         $raw = $short.Substring(2).Split(@('/'), [System.StringSplitOptions]::RemoveEmptyEntries)
@@ -2686,7 +2779,7 @@ function Get-StashCount([string]$Cwd) {
         $LASTEXITCODE = 0
         $result = @(& $git -C $Cwd rev-list --walk-reflogs --count refs/stash 2>$null)
         if ($LASTEXITCODE -ne 0 -or $result.Count -eq 0) { return 0 }
-        return Get-BoundedInt ([string]$result[0]) 0 0 1000000
+        return Get-BoundedInt ([string]$result[0]) 0 0 1000000 7
     } catch { return 0 }
 }
 
@@ -2694,9 +2787,9 @@ function Read-PinFile([string]$Path) {
     try {
         $attrs = [System.IO.File]::GetAttributes($Path)
         if (($attrs -band [System.IO.FileAttributes]::Directory) -ne 0) { return '' }
-        $info = New-Object System.IO.FileInfo($Path)
+        $info = [System.IO.FileInfo]::new($Path)
         if ($info.Length -gt 65536) { return '' }
-        $reader = New-Object System.IO.StreamReader($Path, $StrictUtf8, $true)
+        $reader = [System.IO.StreamReader]::new($Path, $StrictUtf8, $true)
         try { $line = $reader.ReadLine() } finally { $reader.Dispose() }
         return (Remove-ControlChars ([string]$line)).Trim()
     } catch { return '' }
@@ -2704,7 +2797,7 @@ function Read-PinFile([string]$Path) {
 
 function Get-NodeVersion-Uncached([string]$Dir) {
     if ([string]::IsNullOrEmpty($Dir)) { return '' }
-    try { $d = New-Object System.IO.DirectoryInfo($Dir) } catch { $d = $null }
+    try { $d = [System.IO.DirectoryInfo]::new($Dir) } catch { $d = $null }
     while ($null -ne $d) {
         foreach ($name in @('.nvmrc', '.node-version')) {
             $value = Read-PinFile ([System.IO.Path]::Combine($d.FullName, $name))
@@ -2733,7 +2826,7 @@ function Get-PythonVersion-Uncached([string]$Dir) {
     $conda = Remove-ControlChars ([string]$env:CONDA_DEFAULT_ENV)
     if (-not [string]::IsNullOrEmpty($conda) -and $conda -ne 'base') { return $conda }
     if (-not [string]::IsNullOrEmpty($Dir)) {
-        try { $d = New-Object System.IO.DirectoryInfo($Dir) } catch { $d = $null }
+        try { $d = [System.IO.DirectoryInfo]::new($Dir) } catch { $d = $null }
         while ($null -ne $d) {
             $value = Read-PinFile ([System.IO.Path]::Combine($d.FullName, '.python-version'))
             if (-not [string]::IsNullOrEmpty($value)) { return $value }
@@ -2789,21 +2882,21 @@ function Get-SegmentTokens([string]$List) {
     return @([regex]::Split($List.Trim(), '\s+') | Where-Object { -not [string]::IsNullOrEmpty($_) })
 }
 
-$MainSegmentNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$MainSegmentNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $MainSegmentLists = @([string]$Cfg.VL_SEGMENTS, [string]$Cfg.VL_SEGMENTS2, [string]$Cfg.VL_SEGMENTS3)
 foreach ($list in $MainSegmentLists) {
     foreach ($name in (Get-SegmentTokens $list)) { [void]$MainSegmentNames.Add($name) }
 }
-$FloatSegmentNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$FloatSegmentNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $FloatTokens = @(Get-SegmentTokens ([string]$Cfg.VL_FLOAT_SEGMENTS))
 $FloatEnabled = $Cfg.VL_FLOAT -eq '1' -and ([string]$Cfg.VL_FLOAT_SEGMENTS).Length -le 4096 -and $FloatTokens.Count -le 64 -and ([string]$Cfg.VL_FLOAT_SEP).Length -le 256
 if ($FloatEnabled) { foreach ($name in $FloatTokens) { [void]$FloatSegmentNames.Add($name) } }
-$ProbeSegmentNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$ProbeSegmentNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($name in $MainSegmentNames) { [void]$ProbeSegmentNames.Add($name) }
 foreach ($name in $FloatSegmentNames) { [void]$ProbeSegmentNames.Add($name) }
 
 # Collision derivation is lexical only and runs even when all state gates are off.
-$AllStatePaths = New-Object 'System.Collections.Generic.List[object]'
+$AllStatePaths = [System.Collections.Generic.List[object]]::new()
 foreach ($base in @($Cfg.BURN_FILE, $Cfg.RL5H_FILE, $Cfg.RL7D_FILE)) {
     $statePath = Get-StatePaths $base
     if ($null -ne $statePath) { [void]$AllStatePaths.Add($statePath) }
@@ -2828,9 +2921,9 @@ if ($ProbeSegmentNames.Contains('git') -or $ProbeSegmentNames.Contains('stash') 
 }
 if ($ProbeSegmentNames.Contains('project') -and -not [string]::IsNullOrEmpty($GitState.Branch)) { $GitRoot = Get-GitRoot $ProbeCwd }
 
-$SegBgs = New-Object System.Collections.Generic.List[string]
-$SegTxt = New-Object System.Collections.Generic.List[string]
-$SegLen = New-Object 'System.Collections.Generic.List[int]'
+$SegBgs = [System.Collections.Generic.List[string]]::new()
+$SegTxt = [System.Collections.Generic.List[string]]::new()
+$SegLen = [System.Collections.Generic.List[int]]::new()
 
 function Remove-Sgr([string]$Value) {
     if ([string]::IsNullOrEmpty($Value)) { return '' }
@@ -2936,6 +3029,36 @@ function Add-CtxSegment {
     $tcr = Format-Tok $tokCr
     $tcw = Format-Tok $tokCw
     Push-Segment $Cfg.VL_BG_CTX "${pfg} $($Cfg.VL_CTX_GLYPH) ${bar} ${pct}% ${dfg}$($G.Up)${ti} $($G.Down)${to} cr:${tcr} cw:${tcw} "
+}
+
+function Add-CacheSegment {
+    $pct = 0
+    if (-not (Get-PctValue $cacheHit ([ref]$pct))) { return }
+    # Inverted thresholds: cache hits are the good outcome, so 98% must read green
+    # where the same number on a usage gauge reads red.
+    $pfg = Get-Fg (Get-PctFg (100 - $pct))
+    # The percentage is the session's cumulative hit ratio, so it stays true after the
+    # cache goes cold and is never zeroed. What changes is whether anything about it is
+    # still live, and that has to be visible: without a marker a cold pill and a warm
+    # one differ only by an absence, which reads as 98% of a cache that is gone.
+    # expires_at keeps its last value once the cache goes cold and is absent entirely
+    # when the cache never went warm; both are the same thing to read, so both take the
+    # marker. Under an hour the countdown carries seconds, because the short TTL is 5
+    # minutes and a minute-only countdown would sit on 4m for most of it; from an hour
+    # up they are dropped. Format-Countdown is not reused here: it reports an elapsed
+    # reset as "now", which is right for a limit window and wrong for a cold cache.
+    $dfg = Get-Fg $Cfg.VL_FG_DIM
+    $left = "${dfg}cold"
+    $ep = ConvertTo-Epoch $cacheExp
+    if ($null -ne $ep) {
+        $diff = [long]$ep - $Now
+        if ($diff -gt 0) {
+            $left = "${dfg}$($G.Reset)$(Format-Duration ([double]$diff * 1000) ($diff -lt 3600))"
+        }
+    }
+    $bg = $Cfg.VL_BG_CACHE
+    if ([string]::IsNullOrEmpty($bg)) { $bg = $Cfg.VL_BG_CTX }
+    Push-Segment $bg "${pfg} $($Cfg.VL_CACHE_GLYPH) ${pct}% ${left} "
 }
 
 function Add-LimitSegment([string]$Label, [string]$RawPct, [string]$ResetsAt, [string]$Bg, [int]$PctMilli = -1) {
@@ -3145,6 +3268,7 @@ function Add-PythonSegment {
 
 $SegmentBuilders = [ordered]@{
     burn = { Add-BurnSegment }
+    cache = { Add-CacheSegment }
     clock = { Add-ClockSegment }
     cost = { Add-CostSegment }
     ctx = { Add-CtxSegment }
@@ -3162,7 +3286,7 @@ $SegmentBuilders = [ordered]@{
     stash = { Add-StashSegment }
     style = { Add-StyleSegment }
 }
-$SupportedSegmentNames = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+$SupportedSegmentNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($name in $SegmentBuilders.Keys) { [void]$SupportedSegmentNames.Add([string]$name) }
 
 function Build-Segments([string]$List) {
@@ -3218,7 +3342,7 @@ function Get-ScalarCount([string]$Value) {
 function Test-FloatCollision([string]$Target) {
     $runtime = ''
     try { $runtime = [IO.Path]::GetFullPath($ScriptPath) } catch { }
-    $collisionPaths = New-Object 'System.Collections.Generic.List[string]'
+    $collisionPaths = [System.Collections.Generic.List[string]]::new()
     foreach ($path in @($ConfigPath, $runtime)) { if (-not [string]::IsNullOrEmpty($path)) { [void]$collisionPaths.Add($path) } }
     foreach ($path in $ConfigVisitedPaths) { if (-not [string]::IsNullOrEmpty([string]$path)) { [void]$collisionPaths.Add([string]$path) } }
     foreach ($statePath in $AllStatePaths) {
@@ -3260,7 +3384,7 @@ function Write-FloatAtomic([string]$Target, [byte[]]$Bytes) {
             if ($candidate.Length -gt 4096) { return $false }
             $stream = $null
             try {
-                $stream = New-Object IO.FileStream($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
+                $stream = [IO.FileStream]::new($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
                 if ($Bytes.Length -gt 0) { $stream.Write($Bytes, 0, $Bytes.Length) }
                 $stream.Flush($true)
                 $stream.Dispose()
@@ -3331,7 +3455,7 @@ function Invoke-Float {
         $Rst = ''
         $Cfg.VL_LAYOUT = 'fixed'
         Build-Segments ([string]$Cfg.VL_FLOAT_SEGMENTS)
-        $parts = New-Object 'System.Collections.Generic.List[string]'
+        $parts = [System.Collections.Generic.List[string]]::new()
         for ($i = 0; $i -lt $SegTxt.Count; $i++) {
             $plain = (Remove-Sgr ([string]$SegTxt[$i])).Trim()
             if ([string]::IsNullOrEmpty($plain)) { continue }

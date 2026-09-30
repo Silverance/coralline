@@ -44,11 +44,14 @@ eval "$(sed -n '/^seg_limit() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_limit_elapsed() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_limit5h() {/,/^}/p' "$SCRIPT")"
 eval "$(sed -n '/^seg_limit7d() {/,/^}/p' "$SCRIPT")"
+eval "$(sed -n '/^knob_bounded() {/,/^}/p' "$SCRIPT")"
+eval "$(sed -n '/^knob_validate_all() {/,/^}/p' "$SCRIPT")"
 
 RL_MAX_5H=21600
 RL_MAX_7D=691200
 CORALLINE_BURN_WINDOW=600
 BURN_TRIM=1500
+BURN_SLACK=0
 VL_LIMIT_SYNC=0
 CORALLINE_NO_SAMPLE=0
 BASH_BIN=${BASH:-bash}
@@ -115,7 +118,7 @@ unit_gate() {  # $1=root $2=now $3=5h pct $4=5h reset $5=7d pct $6=7d reset $7=r
   NOW="$2"; fh_pct="$3"; fh_rst="$4"; wd_pct="$5"; wd_rst="$6"; CORALLINE_NO_SAMPLE="$7"
   BURN_FILE="$root/burn.tsv"; RL5H_FILE="$root/limit5.tsv"; RL7D_FILE="$root/limit7.tsv"
   _STATE_BURN_GATE=1; _STATE_RL5_GATE=1; _STATE_RL7_GATE=1
-  VL_LIMIT_SYNC=1; CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500
+  VL_LIMIT_SYNC=1; CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500; BURN_SLACK=0
   state_gate
 }
 
@@ -128,10 +131,10 @@ eq 'burn sample canonical TSV row' "$_ROW" $'1000000\t41.200\t1015900'
 eq 'burn sample appended once' "$_BURN_APPENDED" 1
 
 run5h() {  # $1=fixture $2=now $3=mutate
-  local root="$TMPD/run5h" trim="$BURN_TRIM"
+  local root="$TMPD/run5h" trim="$BURN_TRIM" slack="$BURN_SLACK"
   rm -rf "$root"; mkdir -p "$root"
   unit_gate "$root" "$2" '' '' '' '' 1
-  BURN_TRIM=$trim
+  BURN_TRIM=$trim; BURN_SLACK=$slack
   printf '%b' "$1" > "$BURN_FILE"
   _CUR_BURN_VALID=0
   burn_eta_5h "$3"
@@ -146,6 +149,17 @@ eq '5h active ttr' "$_B5_TTR" 15540
 
 run5h '1000000\t6.125\t1015900\n1000060\t7.125\t1015900\n1000300\t8.125\t1015900\n1000360\t8.125\t1015900\n' 1000360 0
 eq '5h fractional pct exact eta' "$_B5_ETA" 22050
+
+# 92-B: a CRLF-terminated row is rejected on every platform. Same fixture as
+# the "5h active state" case above but with \r\n instead of \n; the trailing
+# \r rides into the reset field's value, epoch()'s digits-only regex rejects
+# it, and with every row gone the estimator never leaves "warming". Git
+# Bash's gawk stripped the \r under text-mode line translation before this
+# fix (BINMODE=3 on the same awk invocation, no extra fork — BINMODE=1 read
+# alone left the trim/heal rewrite's own tmp-file write in text mode, which
+# would have reintroduced CRLF into the store on its next write).
+run5h '1000000\t6\t1015900\r\n1000060\t7\t1015900\r\n1000300\t8\t1015900\r\n1000360\t8\t1015900\r\n' 1000360 0
+eq '5h CRLF rows rejected (state)' "$_B5_STATE" warming
 
 run5h '1000000\t6\t1015900\n1000060\t6.500\t1015900\n1000060\t7\t1015900\n1000300\t8\t1015900\n1000360\t8\t1015900\n' 1000360 0
 eq 'same-second maximum keeps slope' "$_B5_ETA" 22080
@@ -187,6 +201,41 @@ cp "$BURN_FILE" "$CASE/before"; _CUR_BURN_VALID=0; BURN_TRIM=3; burn_eta_5h 1
 if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'pre-existing temp never replaces history'; else bad 'pre-existing temp never replaces history' changed; fi
 eq 'pre-existing temp remains untouched' "$(LC_ALL=C tr -d '\n' < "$BURN_FILE.$$.tmp")" stale-canary
 BURN_TRIM=1500
+
+# A store past the 4096-row parse window heals instead of staying refused. Found
+# on a Windows box whose store never trimmed once and reached 8678 rows. Rows
+# 1..104 sit outside the window at 5% so a crossing into the 10% tail would read
+# idle; warming proves only the newest 4096 rows were parsed.
+stuck_store() {  # $1=path $2=rows
+  LC_ALL=C awk -v n="$2" 'BEGIN { for (i = 0; i < n; i++) printf "%d\t%s\t1015900\n", 1000000 + i, (i < n - 4096 ? "5" : "10") }' > "$1"
+}
+CASE="$TMPD/stuck"; mkdir -p "$CASE"
+unit_gate "$CASE" 1004200 '' '' '' '' 1
+stuck_store "$BURN_FILE" 4200; cp "$BURN_FILE" "$CASE/before"
+_CUR_BURN_VALID=0; burn_eta_5h 0
+eq 'stuck store read-only parses the newest 4096 rows' "$_B5_RAW" 'warming 0 0 10000 11700'
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'stuck store read-only leaves the file untouched'; else bad 'stuck store read-only leaves the file untouched' changed; fi
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'stuck store mutable read keeps its estimate' "$_B5_RAW" 'warming 0 0 10000 11700'
+eq 'stuck store heals to BURN_TRIM rows' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 1500
+IFS=$'\t' read -r _FIRST _ _ < "$BURN_FILE"; eq 'stuck store keeps the newest rows' "$_FIRST" 1002700
+eq 'stuck store heal keeps the last row' "$(tail -n 1 "$BURN_FILE")" $'1004199\t10.000\t1015900'
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'healed store reads back to the same estimate' "$_B5_RAW" 'warming 0 0 10000 11700'
+# The largest allowed trim + slack still heals one row past the window.
+BURN_TRIM=3000; BURN_SLACK=1000
+stuck_store "$BURN_FILE" 4097; _CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'stuck store heals at max trim and slack' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 3000
+BURN_TRIM=1500; BURN_SLACK=0
+# The byte and record caps still refuse the whole file and never rewrite it.
+stuck_store "$BURN_FILE" 4200; printf '%05000d\t10\t1015900\n' 1 >> "$BURN_FILE"; cp "$BURN_FILE" "$CASE/before"
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'overlong record past the window still refuses the read' "$_B5_RAW" ''
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'overlong record past the window is never rewritten'; else bad 'overlong record past the window is never rewritten' changed; fi
+stuck_store "$BURN_FILE" 60000; cp "$BURN_FILE" "$CASE/before"
+_CUR_BURN_VALID=0; burn_eta_5h 1
+eq 'store over 1 MiB still refuses the read' "$_B5_RAW" ''
+if cmp -s "$BURN_FILE" "$CASE/before"; then ok 'store over 1 MiB is never rewritten'; else bad 'store over 1 MiB is never rewritten' changed; fi
 
 # Stateless 7d estimator keeps exact rational semantics.
 NOW=1000000
@@ -409,6 +458,9 @@ else ok 'symlink limit fixture unavailable'; fi
 # Existing immutable burn.d and unrelated temp canaries are never touched.
 CASE="$TMPD/coexist"; mkdir -p "$CASE/state/burn.d"; printf 'immutable' > "$CASE/state/burn.d/canary"
 write_config "$CASE/conf" "$CASE/state" burn 0 3
+# Slack would let the file sit above trim between rewrites; pin it off so the
+# repeated-render bound below stays exact.
+printf 'BURN_SLACK=0\n' >> "$CASE/conf"
 make_payload "$CASE/input" 41.2 "$_r5" 30 "$_r7"
 snapshot_tree "$CASE/state/burn.d" "$CASE/before.tar"
 run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out" "$CASE/err" 0
@@ -524,12 +576,32 @@ run_concurrency() {  # $1=runtime $2=workers $3=tag
       [ ! -s "$path.err" ] && _CC_STDERR_EMPTY=$(( _CC_STDERR_EMPTY + 1 ))
     done
   done
-  if [ -f "$root/state/burn.tsv" ]; then _CC_ROWS=$(wc -l < "$root/state/burn.tsv" | tr -d ' '); else _CC_ROWS=0; fi
+  # Single-writer contract: the per-(second, window) election means N renders
+  # in the same second persist ONE row, so the row count equals the number of
+  # distinct (sample, reset) pairs -- never the render count -- and duplicates
+  # are the failure signature of a broken election.
+  _CC_ROWS=0; _CC_DUPES=0
+  if [ -f "$root/state/burn.tsv" ]; then
+    _CC_ROWS=$(wc -l < "$root/state/burn.tsv" | tr -d ' ')
+    _CC_DUPES=$(LC_ALL=C awk -F '\t' '{k=$1 FS $3} seen[k]++ {d++} END{print d+0}' "$root/state/burn.tsv")
+  fi
   _CC_IMMUTABLE=0
   [ "$(LC_ALL=C tr -d '\n' < "$root/state/burn.d/canary")" = immutable-concurrency-canary ] && _CC_IMMUTABLE=1
+  # Winner-published estimate: present, regular, six validly-shaped fields;
+  # and no orphaned publish temporaries once every render has exited.
+  _CC_EST=0
+  if [ -f "$root/state/burn.tsv.est" ] && [ ! -L "$root/state/burn.tsv.est" ]; then
+    _E1=""; _E2=""; _E3=""; _E4=""; _E5=""; _E6=""
+    read -r _E1 _E2 _E3 _E4 _E5 _E6 < "$root/state/burn.tsv.est" 2>/dev/null || :
+    case "$_E1$_E2$_E4$_E5$_E6" in (''|*[!0-9]*) ;; (*)
+      case "$_E3" in (active|idle|warming) _CC_EST=1 ;; esac ;; esac
+  fi
+  _CC_TMPS=$(ls "$root/state" 2>/dev/null | grep -c '\.tmp$')
   [ "$_CC_RCFILES" -eq "$_CC_EXPECTED" ] && [ "$_CC_SUCCESS" -eq "$_CC_EXPECTED" ] \
     && [ "$_CC_NONEMPTY" -eq "$_CC_EXPECTED" ] && [ "$_CC_MATCH" -eq "$_CC_EXPECTED" ] \
-    && [ "$_CC_STDERR_EMPTY" -eq "$_CC_EXPECTED" ] && [ "$_CC_ROWS" -eq "$_CC_EXPECTED" ] \
+    && [ "$_CC_STDERR_EMPTY" -eq "$_CC_EXPECTED" ] \
+    && [ "$_CC_ROWS" -ge 1 ] && [ "$_CC_ROWS" -le "$_CC_EXPECTED" ] && [ "$_CC_DUPES" -eq 0 ] \
+    && [ "$_CC_EST" -eq 1 ] && [ "$_CC_TMPS" -eq 0 ] \
     && [ "$_CC_IMMUTABLE" -eq 1 ]
 }
 
@@ -547,10 +619,13 @@ for _N in 5 12 16; do
     eq "concurrency n=$_N successes" "$_CC_SUCCESS" $((_N * 2))
     eq "concurrency n=$_N exact outputs" "$_CC_MATCH" $((_N * 2))
     eq "concurrency n=$_N stderr empty" "$_CC_STDERR_EMPTY" $((_N * 2))
-    eq "concurrency n=$_N TSV rows" "$_CC_ROWS" $((_N * 2))
+    eq "concurrency n=$_N single writer per (second, window)" "$_CC_DUPES" 0
+    ok "concurrency n=$_N TSV rows within [1, renders] ($_CC_ROWS)"
+    eq "concurrency n=$_N estimate published and well-shaped" "$_CC_EST" 1
+    eq "concurrency n=$_N no orphaned publish temporaries" "$_CC_TMPS" 0
     eq "concurrency n=$_N immutable store untouched" "$_CC_IMMUTABLE" 1
   else
-    bad "concurrency n=$_N" "expected=$_CC_EXPECTED rcfiles=$_CC_RCFILES success=$_CC_SUCCESS nonempty=$_CC_NONEMPTY match=$_CC_MATCH stderr=$_CC_STDERR_EMPTY rows=$_CC_ROWS immutable=$_CC_IMMUTABLE"
+    bad "concurrency n=$_N" "expected=$_CC_EXPECTED rcfiles=$_CC_RCFILES success=$_CC_SUCCESS nonempty=$_CC_NONEMPTY match=$_CC_MATCH stderr=$_CC_STDERR_EMPTY rows=$_CC_ROWS dupes=$_CC_DUPES est=$_CC_EST tmps=$_CC_TMPS immutable=$_CC_IMMUTABLE"
   fi
 done
 
@@ -573,6 +648,239 @@ true_case 'sweep keeps a non-temporary suffix' test -f "$_SB_BASE.333.bak"
 true_case 'sweep keeps a symlink' test -L "$_SB_BASE.444.tmp"
 true_case 'sweep keeps a temporary newer than the store' test -f "$_SB_BASE.555.tmp"
 true_case 'sweep leaves the store intact' test -s "$_SB_BASE"
+
+# Trim hysteresis: at the cap, appends accumulate for BURN_SLACK rows before one
+# render pays the rewrite; healing is never deferred by slack.
+CASE="$TMPD/slack"; mkdir -p "$CASE"
+unit_gate "$CASE" 6 '' '' '' '' 1
+BURN_TRIM=3; BURN_SLACK=2
+run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n' 6 1
+eq 'slack holds the rewrite below trim+slack' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 4
+run5h '1\t6\t9\n2\t6\t9\n3\t7\t9\n4\t7\t9\n5\t8\t9\n6\t8\t9\n' 7 1
+eq 'past trim+slack rewrites down to trim' "$(wc -l < "$BURN_FILE" | tr -d ' ')" 3
+run5h '1\t6\t9\n2\t7\t9\n9999000\t99\t99999999\n' 6 1
+if grep -q 99999999 "$BURN_FILE"; then bad 'heal is not deferred by slack' present; else ok 'heal is not deferred by slack'; fi
+BURN_TRIM=1500; BURN_SLACK=0
+
+# Per-(second, window, pct) burn-write election. Tokens carry the store's own
+# file name as prefix (provenance: a shared directory never gets foreign files
+# deleted) and every touch around the claim re-runs the store's TOCTOU guards.
+CASE="$TMPD/lead"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+TOK="$CASE/burn.tsv.1000000.1015900.41200.tick"
+_BURN_LEAD=
+true_case 'lead: first claim wins' state_burn_lead
+true_case 'lead: winning claim leaves a token' test -f "$TOK"
+_BURN_LEAD=
+if state_burn_lead; then bad 'lead: same-pct token loses' won; else ok 'lead: same-pct token loses'; fi
+rm -f "$TOK"
+: > "$CASE/burn.tsv.1000000.1015900.50000.tick"
+_BURN_LEAD=
+if state_burn_lead; then bad 'lead: higher-pct claim wins over ours' won; else ok 'lead: higher-pct claim wins over ours'; fi
+rm -f "$CASE/burn.tsv.1000000.1015900.50000.tick"
+: > "$CASE/burn.tsv.1000000.1015900.30000.tick"
+_BURN_LEAD=
+true_case 'lead: our higher reading beats a lower claim' state_burn_lead
+true_case 'lead: divergent readings both leave tokens' test -f "$TOK"
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.1000000.1016000.41200.tick"
+_BURN_LEAD=
+true_case 'lead: same-second other-window token does not block' state_burn_lead
+true_case 'lead: other-window token kept by the sweep' test -f "$CASE/burn.tsv.1000000.1016000.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.999990.1015900.41200.tick"
+: > "$CASE/burn.tsv.999999.1015900.41200.tick"
+: > "$CASE/burn.tsv.1000002.1015900.41200.tick"
+: > "$CASE/burn.tsv.abc.1015900.41200.tick"
+: > "$CASE/burn.tsv.999990.1015900.tick"
+: > "$CASE/tick.999990.1015900.41200.tick"
+ln -s /dev/null "$CASE/burn.tsv.999980.1015900.41200.tick"
+_BURN_LEAD=
+state_burn_lead || bad 'lead: sweep round claim' lost
+true_case 'lead sweep: stale token removed' test ! -e "$CASE/burn.tsv.999990.1015900.41200.tick"
+true_case 'lead sweep: recent-past token kept for stragglers' test -f "$CASE/burn.tsv.999999.1015900.41200.tick"
+true_case 'lead sweep: future token removed' test ! -e "$CASE/burn.tsv.1000002.1015900.41200.tick"
+true_case 'lead sweep: non-numeric epoch kept' test -f "$CASE/burn.tsv.abc.1015900.41200.tick"
+true_case 'lead sweep: two-field name kept' test -f "$CASE/burn.tsv.999990.1015900.tick"
+true_case 'lead sweep: foreign unprefixed file untouched' test -f "$CASE/tick.999990.1015900.41200.tick"
+true_case 'lead sweep: symlink kept' test -L "$CASE/burn.tsv.999980.1015900.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick 2>/dev/null
+: > "$CASE/burn.tsv.1000000.1015900.999999999999999999999999.tick"
+: > "$CASE/burn.tsv.999990.1015900.999999999999999999999999.tick"
+_BURN_LEAD=
+state_burn_lead 2> "$CASE/overflow.err" || bad 'lead: oversized field never blocks a claim' lost
+eq 'lead: oversized digit field leaks no stderr' "$(wc -c < "$CASE/overflow.err" | tr -d ' ')" 0
+true_case 'lead sweep: stale oversized name kept, not compared' test -f "$CASE/burn.tsv.999990.1015900.999999999999999999999999.tick"
+rm -f "$CASE"/burn.tsv.*.tick "$CASE"/tick.* 2>/dev/null
+ln -s "$CASE/linktarget" "$TOK"
+_BURN_LEAD=
+if state_burn_lead; then bad 'lead: symlink at the token name loses' won; else ok 'lead: symlink at the token name loses'; fi
+true_case 'lead: symlink token never followed' test ! -e "$CASE/linktarget"
+true_case 'lead: symlink token never deleted' test -L "$TOK"
+rm -f "$TOK"
+_STATE_PATHS_OK=0
+_BURN_LEAD=
+true_case 'lead: revalidation failure fails open' state_burn_lead
+true_case 'lead: fail-open touches nothing' test ! -e "$TOK"
+_STATE_PATHS_OK=1
+CASE="$TMPD/lead-fresh"
+unit_gate "$CASE/absent" 1000000 41.2 1015900 '' '' 0
+_BURN_LEAD=
+true_case 'lead: missing store parent fails open' state_burn_lead
+true_case 'lead: fail-open creates no token' test ! -e "$CASE/absent/burn.tsv.1000000.1015900.41200.tick"
+_BURN_LEAD=
+
+# Published-estimate fast path: the election winner publishes its validated
+# awk result; a follower that lost to a covering claim adopts it only after
+# every field survives the same validation the awk output gets, and every
+# anomaly falls back to the full parse.
+CASE="$TMPD/est"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+EST="$CASE/burn.tsv.est"
+
+# Publish: winner shape, maintenance/no-raw refusal.
+_CUR_BURN_VALID=1; _B5_RAW='warming 0 0 41200 9000'; _B5_TTR=9000
+burn_est_publish
+eq 'est publish: winner writes the six-field line' "$(cat "$EST" 2>/dev/null)" '1000000 1009000 warming 0 0 41200'
+rm -f "$EST"
+_CUR_BURN_VALID=0
+burn_est_publish
+true_case 'est publish: maintenance winner never publishes' test ! -e "$EST"
+_CUR_BURN_VALID=1; _B5_RAW=''
+burn_est_publish
+true_case 'est publish: no raw line, no publish' test ! -e "$EST"
+mkdir "$EST"
+_B5_RAW='warming 0 0 41200 9000'
+burn_est_publish
+true_case 'est publish: directory at est name aborts' test -d "$EST"
+true_case 'est publish: aborted publish leaves no tmp' test ! -e "$CASE/burn.tsv.$$.tmp"
+rmdir "$EST"
+
+# Adopt: fresh valid estimate is used without the awk (values differ from
+# anything the empty TSV could produce, so adoption is observable).
+printf '1000000 1015900 active 300 5000 50000\n' > "$EST"
+_CUR_BURN_VALID=1
+true_case 'est adopt: fresh valid estimate adopted' burn_est_adopt
+eq 'est adopt: state comes from the estimate' "$_B5_STATE" active
+eq 'est adopt: ttr derives from window and local NOW' "$_B5_TTR" 15900
+printf '999996 1015900 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: stale estimate rejected' adopted; else ok 'est adopt: stale estimate rejected'; fi
+printf '1000002 1015900 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: future-dated estimate rejected' adopted; else ok 'est adopt: future-dated estimate rejected'; fi
+printf '1000000 1015900 active 90000 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: span beyond window cap rejected' adopted; else ok 'est adopt: span beyond window cap rejected'; fi
+printf '1000000 1015900 active 300 200000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: delta beyond pct cap rejected' adopted; else ok 'est adopt: delta beyond pct cap rejected'; fi
+printf '1000000 1015900 active 300 5000 100001\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: latest beyond pct cap rejected' adopted; else ok 'est adopt: latest beyond pct cap rejected'; fi
+printf '1000000 1015900 hacked 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: unknown state token rejected' adopted; else ok 'est adopt: unknown state token rejected'; fi
+printf '1000000 253402300799 active 300 5000 50000\n' > "$EST"
+if burn_est_adopt; then bad 'est adopt: reset beyond the 5h horizon rejected' adopted; else ok 'est adopt: reset beyond the 5h horizon rejected'; fi
+printf '1000000 1021600 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: reset at the 5h horizon accepted' burn_est_adopt
+printf '1000000 1015900 active 08 5000 50000\n' > "$EST"
+if burn_est_adopt 2> "$CASE/octal.err"; then bad 'est adopt: leading-zero span rejected' adopted; else ok 'est adopt: leading-zero span rejected'; fi
+eq 'est adopt: leading-zero rejection leaks no stderr' "$(wc -c < "$CASE/octal.err" | tr -d ' ')" 0
+printf '1000000 1015900 active 300 08 50000\n' > "$EST"
+if burn_est_adopt 2>/dev/null; then bad 'est adopt: leading-zero delta rejected' adopted; else ok 'est adopt: leading-zero delta rejected'; fi
+printf '1000000 1015900 active 300 5000 08000\n' > "$EST"
+if burn_est_adopt 2>/dev/null; then bad 'est adopt: leading-zero latest rejected' adopted; else ok 'est adopt: leading-zero latest rejected'; fi
+printf '1000000 1015900 active a[$(touch %s/pwn)] 5000 50000\n' "$CASE" > "$EST"
+if burn_est_adopt; then bad 'est adopt: arithmetic injection rejected' adopted; else ok 'est adopt: arithmetic injection rejected'; fi
+true_case 'est adopt: injection produced no side effect' test ! -e "$CASE/pwn"
+{ printf '1000000 1015900 active 300 5000 50000 '; head -c 400 /dev/zero | tr '\0' '9'; printf '\n'; } > "$EST"
+if burn_est_adopt; then bad 'est adopt: oversized line rejected' adopted; else ok 'est adopt: oversized line rejected'; fi
+rm -f "$EST"; ln -s "$CASE/esttarget" "$EST"
+if burn_est_adopt; then bad 'est adopt: symlink est rejected' adopted; else ok 'est adopt: symlink est rejected'; fi
+true_case 'est adopt: symlink est not followed' test ! -e "$CASE/esttarget"
+true_case 'est adopt: symlink est not deleted' test -L "$EST"
+rm -f "$EST"
+printf '999998 1015900 active 300 5000 50000\n' > "$EST"
+true_case 'est adopt: two-second-old estimate still adopts' burn_est_adopt
+eq 'est adopt: aged estimate ttr still local' "$_B5_TTR" 15900
+_CUR_BURN_VALID=0
+rm -f "$EST"
+
+# Read-only wiring: a CORALLINE_NO_SAMPLE render never consumes a published
+# estimate (test/preview determinism, rule #32) and never writes one. The
+# planted est claims an active state no empty TSV could produce, so any
+# adoption would be visible in the output.
+CASE="$TMPD/est-ro"; mkdir -p "$CASE/state"
+write_config "$CASE/conf" "$CASE/state" burn 0
+_now=$(date +%s)
+make_payload "$CASE/input" 41.2 "$((_now + 9000))" '' ''
+printf '%s %s active 300 5000 50000\n' "$_now" "$((_now + 9000))" > "$CASE/state/burn.tsv.est"
+cp "$CASE/state/burn.tsv.est" "$CASE/est.before"
+run_runtime "$BASH_BIN" "$CASE/conf" "$CASE/input" "$CASE/out" "$CASE/err" 1
+printf '\033[0m B … \033[0m\n' > "$CASE/oracle"
+if cmp -s "$CASE/out" "$CASE/oracle"; then ok 'est read-only: no-sample render ignores a fresh estimate'; else bad 'est read-only: no-sample render ignores a fresh estimate' "$(cat "$CASE/out")"; fi
+if cmp -s "$CASE/state/burn.tsv.est" "$CASE/est.before"; then ok 'est read-only: estimate file untouched'; else bad 'est read-only: estimate file untouched' changed; fi
+eq 'est read-only: no tokens created' "$(ls "$CASE/state" | grep -c '\.tick$')" 0
+eq 'est read-only: stderr empty' "$(wc -c < "$CASE/err" | tr -d ' ')" 0
+
+# Maintenance claim: a render with no valid 5h reading may still win the
+# mutate path (trim/heal/sweep never starve), under the reserved 0.0 name; it
+# loses to any same-second claimant, and a real claimant ignores it.
+CASE="$TMPD/lead-maint"; mkdir -p "$CASE"
+unit_gate "$CASE" 1000000 '' '' '' '' 0
+_BURN_LEAD=
+true_case 'maint: reading-less render claims maintenance' state_burn_lead
+true_case 'maint: reserved token created' test -f "$CASE/burn.tsv.1000000.0.0.tick"
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.1000000.1015900.41200.tick"
+_BURN_LEAD=
+if state_burn_lead; then bad 'maint: loses to a same-second claimant' won; else ok 'maint: loses to a same-second claimant'; fi
+rm -f "$CASE"/burn.tsv.*.tick
+: > "$CASE/burn.tsv.1000000.0.0.tick"
+unit_gate "$CASE" 1000000 41.2 1015900 '' '' 0
+_BURN_LEAD=
+true_case 'maint: real claimant ignores the maintenance token' state_burn_lead
+true_case 'maint: real claim landed beside it' test -f "$CASE/burn.tsv.1000000.1015900.41200.tick"
+rm -f "$CASE"/burn.tsv.*.tick
+_BURN_LEAD=
+
+# Two-window coverage under election: a session holding a different (newer) 5h
+# window than the tick winner must still persist its rows and reach the limit
+# store, and the newer window's history must be enough for an active estimate.
+# The store starts absent, so the first render also proves the fail-open path
+# creates a working store from nothing.
+CASE="$TMPD/twowin"; mkdir -p "$CASE"
+_now=$(date +%s); _rA=$((_now + 9000)); _rB=$((_now + 12000))
+write_config "$CASE/conf" "$CASE/state" 'burn limit5h' 1
+_i=0
+while [ "$_i" -lt 3 ]; do
+  make_payload "$CASE/inA" "3$_i.5" "$_rA" '' ''
+  make_payload "$CASE/inB" "4$_i.5" "$_rB" '' ''
+  CORALLINE_CONFIG="$CASE/conf" CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$CASE/inA" > /dev/null 2> "$CASE/errA.$_i" &
+  _pidA=$!
+  CORALLINE_CONFIG="$CASE/conf" CORALLINE_NO_SAMPLE=0 "$BASH_BIN" "$SCRIPT" < "$CASE/inB" > /dev/null 2> "$CASE/errB.$_i" &
+  _pidB=$!
+  wait "$_pidA" "$_pidB" 2>/dev/null
+  _i=$((_i + 1))
+  sleep 1
+done
+_rowsA=$(awk -F '\t' -v r="$_rA" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | wc -l | tr -d ' ')
+_rowsB=$(awk -F '\t' -v r="$_rB" '$3 == r' "$CASE/state/burn.tsv" 2>/dev/null | wc -l | tr -d ' ')
+true_case 'two-window: older-window rows persisted' test "$_rowsA" -ge 2
+true_case 'two-window: newer-window rows persisted' test "$_rowsB" -ge 2
+# Once the newer reset lands, rl_choose makes every session render (and thus
+# republish) that window, so the store legitimately converges on B's entries;
+# the non-suppression proof is that entries exist at all and include B's reset.
+entry_count "$CASE/state/limit5.d"; _ENTRIES=$_COUNT
+true_case 'two-window: limit store received entries' test "$_ENTRIES" -ge 1
+_LIM_B=0; for _e in "$CASE/state/limit5.d/${_rB}"_*; do [ -e "$_e" ] && _LIM_B=1; done
+eq 'two-window: newer reset reached the limit store' "$_LIM_B" 1
+# The newer window's persisted rows must feed an active estimate rather than
+# stranding that session on permanent warming. The estimator needs crossings
+# spanning >= win/10 seconds, which a 3s render loop cannot produce, so the
+# read fixture adds two backdated in-window rows for the same reset; the LAST
+# crossing still comes from a row the elected renders persisted above.
+CASE2="$TMPD/twowin-read"; mkdir -p "$CASE2"
+{ printf '%s\t38.000\t%s\n' "$((_now - 300))" "$_rB"; printf '%s\t39.000\t%s\n' "$((_now - 240))" "$_rB"; cat "$CASE/state/burn.tsv"; } > "$CASE2/burn.tsv"
+unit_gate "$CASE2" $((_now + 5)) 49.5 "$_rB" '' '' 1
+burn_eta_5h 0
+eq 'two-window: newer window estimates active' "$_B5_STATE" active
 
 # Binding and renderer regressions after state/storage tests. Stubs isolate the
 # already-tested estimators from the presentation logic.
@@ -802,6 +1110,79 @@ eq 'redirected render stderr empty' "$(file_bytes "$CASE/redirected/err")" 0
 default_store_case "$CASE/plain" ""
 true_case 'unset CLAUDE_CONFIG_DIR keeps the historical HOME store' test -e "$CASE/plain/home/.claude/coralline/limit-5h.d"
 eq 'plain render stderr empty' "$(file_bytes "$CASE/plain/err")" 0
+
+# 92-A: every integer knob accepts the same spellings and applies the same
+# range as PS1's Get-BoundedInt. `name L min max fallback` per row of the
+# plan's table; run against knob_bounded directly (fork-free, no $(...)).
+knob_case() {  # $1=knob $2=raw $3=L $4=min $5=max $6=fallback $7=expect
+  local out
+  knob_bounded "$2" "$3" "$4" "$5" "$6" out
+  eq "knob $1 '$2'" "$out" "$7"
+}
+knob_row() {  # $1=knob $2=L $3=min $4=max $5=fallback
+  local name="$1" L="$2" min="$3" max="$4" fb="$5" bad long minus1 plus1
+  # Rejected spellings: fallback regardless of range (sign, whitespace, exponent, non-digit).
+  # $'9\r' (a CR decoded from ANSI-C quoting) and non-ASCII digits (fullwidth
+  # five, Arabic-Indic five) must fall back too; one reaching 10# aborts a render.
+  for bad in '' '+5' '-0' ' 5' '5 ' '1e1' 'x' $'9\r' $'9\n' '５' '٥'; do
+    knob_case "$name" "$bad" "$L" "$min" "$max" "$fb" "$fb"
+  done
+  # L+1 digits: too long, fallback.
+  printf -v long '%0*d' $((L + 1)) 9
+  knob_case "$name" "$long" "$L" "$min" "$max" "$fb" "$fb"
+  # Leading zeros normalize to plain decimal when in range, fallback when not
+  # (each spelling only makes sense once it fits within this knob's own L).
+  if [ "$min" -le 5 ] && [ "$max" -ge 5 ]; then
+    knob_case "$name" '5' "$L" "$min" "$max" "$fb" 5
+    [ "$L" -ge 2 ] && knob_case "$name" '05'  "$L" "$min" "$max" "$fb" 5
+    [ "$L" -ge 3 ] && knob_case "$name" '005' "$L" "$min" "$max" "$fb" 5
+  else
+    knob_case "$name" '5' "$L" "$min" "$max" "$fb" "$fb"
+  fi
+  if [ "$min" -le 7 ] && [ "$max" -ge 7 ] && [ "$L" -ge 3 ]; then
+    knob_case "$name" '007' "$L" "$min" "$max" "$fb" 7
+  fi
+  # min-1 / max+1 (still within L digits): out of range, fallback.
+  if [ "$min" -gt 0 ]; then
+    minus1=$((min - 1))
+    knob_case "$name" "$minus1" "$L" "$min" "$max" "$fb" "$fb"
+  fi
+  plus1=$((max + 1))
+  if [ "${#plus1}" -le "$L" ]; then
+    knob_case "$name" "$plus1" "$L" "$min" "$max" "$fb" "$fb"
+  fi
+  # min / max themselves: accepted at the boundary.
+  knob_case "$name" "$min" "$L" "$min" "$max" "$fb" "$min"
+  knob_case "$name" "$max" "$L" "$min" "$max" "$fb" "$max"
+}
+knob_row VL_BAR_WIDTH          2 0  64    5
+knob_row VL_PATH_DEPTH         3 1  256   4
+knob_row VL_NAME_MAX           4 0  4096  0
+knob_row VL_COST_DECIMALS      1 0  9     2
+knob_row VL_WARN_PCT           3 0  100   50
+knob_row VL_HOT_PCT            3 0  100   75
+knob_row VL_MAX_LINES          2 1  64    3
+knob_row VL_WRAP_MARGIN        5 0  32767 4
+knob_row CORALLINE_BURN_WINDOW 5 60 86400 600
+knob_row BURN_TRIM             4 1  3000  1500
+knob_row BURN_SLACK            4 0  1000  500
+
+# HOT<WARN reset: knob_validate_all resets BOTH to their defaults, mirroring
+# PS1 (statusline.ps1, right after its Get-BoundedInt calls). A kept (non-
+# inverted) pair, including the equal case, is left alone. knob_validate_all
+# touches every knob, so give the other ten a valid value first (set -u).
+VL_BAR_WIDTH=5; VL_PATH_DEPTH=4; VL_NAME_MAX=0; VL_COST_DECIMALS=2
+VL_MAX_LINES=3; VL_WRAP_MARGIN=4
+CORALLINE_BURN_WINDOW=600; BURN_TRIM=1500; BURN_SLACK=500
+VL_WARN_PCT=60; VL_HOT_PCT=40; knob_validate_all
+eq 'HOT<WARN resets WARN to default' "$VL_WARN_PCT" 50
+eq 'HOT<WARN resets HOT to default' "$VL_HOT_PCT" 75
+VL_WARN_PCT=60; VL_HOT_PCT=60; knob_validate_all
+eq 'WARN=HOT kept (equal, not inverted)' "$VL_WARN_PCT" 60
+eq 'WARN=HOT kept (equal, not inverted), HOT side' "$VL_HOT_PCT" 60
+VL_WARN_PCT=30; VL_HOT_PCT=80; knob_validate_all
+eq 'ordinary WARN<HOT kept, WARN side' "$VL_WARN_PCT" 30
+eq 'ordinary WARN<HOT kept, HOT side' "$VL_HOT_PCT" 80
 
 printf 'SUMMARY pass=%s fail=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
