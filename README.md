@@ -84,7 +84,7 @@ Run the interactive installer:
 curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.sh | bash
 ```
 
-It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.18.1` or another ref. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
+It recommends the latest tagged release or lets you choose mutable `main`. Skip the prompt with `--ref v0.18.1-silverance.1` or another ref. This fork tags its releases `<upstream version>-silverance.<n>`; the upstream tags (such as `v0.18.1`) do not exist here. If the one-line path cannot run, use the [manual fallback in `INSTALL.md`](./INSTALL.md#manual-fallback).
 
 ### Windows without Git Bash
 
