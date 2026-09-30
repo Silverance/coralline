@@ -306,6 +306,12 @@ function New-Payload([string]$Cwd) {
                 cache_creation_input_tokens = 4321
             }
         }
+        prompt_cache = [ordered]@{
+            warm = $true
+            ttl = '5m'
+            expires_at = 1000300
+            hit_ratio = 0.9812
+        }
         rate_limits = [ordered]@{
             five_hour = [ordered]@{ used_percentage = 41.2; resets_at = '' }
             seven_day = [ordered]@{ used_percentage = 78.9; resets_at = '' }
@@ -549,7 +555,7 @@ esac
     Check 'reparse validation precedes config read' ($source.IndexOf('Test-SafeRegularFile $Path') -lt $source.IndexOf('Read-StrictUtf8File $Path'))
     Check 'Bash oracle main extraction contains central scrub' ($bashSource.Contains('] | map(scrub) | join('))
 
-    $expectedRegistry = @('burn','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style')
+    $expectedRegistry = @('burn','cache','clock','cost','ctx','dir','duration','effort','git','limit5h','limit7d','lines','model','node','project','python','stash','style')
     $builderBlock = [regex]::Match($source, '(?s)\$SegmentBuilders = \[ordered\]@\{(.*?)\n\}').Groups[1].Value
     $actualRegistry = @([regex]::Matches($builderBlock, '(?m)^    ([A-Za-z0-9]+) =') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
     Check 'closed PowerShell registry equals WIN-02 inventory' (($actualRegistry -join ' ') -eq (($expectedRegistry | Sort-Object) -join ' '))
@@ -735,6 +741,44 @@ shell_quote "$CORALLINE_Q_VALUE"
         Check-Run ('WIN-PS1 style gate ' + $styleCase.Name) $psRun
         Check-Exact ('WIN-PS1 style gate parity ' + $styleCase.Name) $psRun $bashRun
     }
+
+    # effort comes from the task transcript's first assistant line (never the payload),
+    # so each fixture pins one reader rule; Bash is the byte-parity oracle.
+    $effortRoot = Join-Path $TempRoot 'subagent-effort'
+    $effortDir = Join-Path $effortRoot 'session\subagents'
+    [void][IO.Directory]::CreateDirectory($effortDir)
+    $effortTranscript = Join-Path $effortRoot 'session.jsonl'
+    Write-Utf8 $effortTranscript ''
+    $as = '{"type":"assistant","message":{"content":[]},'
+    $lf = [string][char]10
+    $deep = ''
+    for ($i = 0; $i -lt 64; $i++) { $deep += '{"type":"attachment"}' + $lf }
+    $late = ''
+    for ($i = 0; $i -lt 16; $i++) { $late += '{"type":"attachment"}' + $lf }
+    $effortFixtures = [ordered]@{
+        'e-med'     = '{"type":"user","message":{"content":"say \"effort\":\"max\",\"perTurnEffort\":1"}}' + $lf + $as + '"effort":"medium","perTurnEffort":null}' + $lf
+        'e-xhigh'   = $as + '"effort":"xhigh","perTurnEffort":"xhigh"}' + $lf
+        'e-haiku'   = '{"type":"user"}' + $lf + $as + '"uuid":"u"}' + $lf
+        'e-partial' = $as + '"effort":"high","perTurnEffort":null'
+        'e-deep'    = $deep + $as + '"effort":"low","perTurnEffort":null}' + $lf
+        'e-bad'     = $as + '"effort":"turbo","perTurnEffort":null}' + $lf
+        'e-late'    = $late + $as + '"effort":"high","perTurnEffort":null}' + $lf
+        'e-remote'  = $as + '"effort":"low","perTurnEffort":null}' + $lf
+    }
+    foreach ($key in $effortFixtures.Keys) { Write-Utf8 (Join-Path $effortDir ('agent-' + $key + '.jsonl')) $effortFixtures[$key] }
+    $effortTasks = @()
+    foreach ($key in @('e-med','e-xhigh','e-haiku','e-partial','e-deep','e-bad','e-none','e-late')) { $effortTasks += [ordered]@{ id=$key; name=$key; type='local_agent'; model='claude-sonnet-5'; effort='max' } }
+    $effortTasks += [ordered]@{ id='e-remote'; name='e-remote'; type='remote_agent'; effort='low' }
+    $effortJson = Json ([ordered]@{ transcript_path=(Forward-Path $effortTranscript); tasks=$effortTasks })
+    $effortConfig = New-Config 'sub-effort' @(('. ' + (Quote-FromConfigure $themePath)), ('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name model effort')))
+    $effortPs = Invoke-Subagent $effortJson $effortConfig @{}
+    $effortBash = Invoke-BashSubagent $effortJson $effortConfig @{}
+    Check-Run 'WIN-PS1 subagent effort' $effortPs
+    Check-Exact 'WIN-PS1 subagent effort parity' $effortPs $effortBash
+    $effortRows = @(Get-SubagentRows $effortPs)
+    $psi = [string][char]0x03C8
+    Check 'WIN-PS1 effort renders transcript med and xhigh' ($effortRows.Count -eq 9 -and $effortRows[0].content.Contains($psi + ' med ') -and $effortRows[1].content.Contains($psi + ' xhigh ') -and $effortRows[7].content.Contains($psi + ' high '))
+    Check 'WIN-PS1 effort ignores payload, partial, deep, unknown, remote' (@($effortRows[2..6] + $effortRows[8] | Where-Object { $_.content.Contains($psi) }).Count -eq 0)
 
     $nameOnlyConfig = New-Config 'sub-name-only' @(('VL_SUB_SEGMENTS=' + (Quote-FromConfigure 'name')))
     $oldDoc = '{"tasks":[{"id":"old","name":"old"}]}'
@@ -1354,6 +1398,9 @@ fi
     $burnPayload.rate_limits.seven_day.resets_at = '1345600'
     $segmentCases = [ordered]@{
         burn = [pscustomobject]@{ Show=@('VL_SEGMENTS=burn','VL_CLOCK=off'); Needle=((Glyph 0x2197) + ' 7d ' + (Glyph 0x21E2)); Payload=$burnPayload; Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.rate_limits.five_hour.used_percentage=$null; $p.rate_limits.seven_day.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=burn' }
+        # The payload's expires_at (1000300) is 300s past the pinned CORALLINE_TEST_NOW,
+        # so the countdown lands on the seconds-carrying side of the one-hour boundary.
+        cache = [pscustomobject]@{ Show=@('VL_SEGMENTS=cache','VL_CLOCK=off'); Needle=((Glyph 0x26C1) + ' 98% ' + (Glyph 0x21BA) + '5m00s'); Environment=@{CORALLINE_TEST_NOW='1000000'}; Suppress={ param($p) $p.prompt_cache.hit_ratio=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=cache' }
         clock = [pscustomobject]@{ Show=@('VL_SEGMENTS=clock','VL_CLOCK=24h','VL_CLOCK_SECONDS=0'); Needle=(Glyph 0x2299); Suppress={ param($p) $p }; SuppressConfig=@('VL_SEGMENTS=clock','VL_CLOCK=off') }
         cost = [pscustomobject]@{ Show=@('VL_SEGMENTS=cost','VL_CLOCK=off'); Needle='$1.23'; Suppress={ param($p) $p.cost.total_cost_usd=0; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=cost' }
         ctx = [pscustomobject]@{ Show=@('VL_SEGMENTS=ctx','VL_CLOCK=off'); Needle='62%'; Suppress={ param($p) $p.context_window.used_percentage=$null; $p }; SuppressConfig=$baseConfigLines + 'VL_SEGMENTS=ctx' }
@@ -2144,7 +2191,7 @@ fi
     Write-Utf8 $overPath $overLines.ToString()
     $overPs = Invoke-Statusline (Json $statePayload) $overConfig $stateEnvWrite '' 30000
     Check-Run 'WIN-02 PowerShell burn cap+1 watchdog' $overPs
-    Check 'WIN-02 PowerShell burn cap+1 leaves the oversized TSV untrimmed' (([IO.File]::ReadAllLines($overPath, $StrictUtf8)).Count -eq 4098)
+    Check 'WIN-02 PowerShell burn cap+1 heals the oversized TSV to BURN_TRIM' (([IO.File]::ReadAllLines($overPath, $StrictUtf8)).Count -eq 1500)
     Check 'WIN-02 PowerShell burn cap+1 creates no ignored marker store' (-not [IO.Directory]::Exists((Join-Path $overRoot 'burn.d')))
     $overLimit = Join-Path $overRoot 'limit5.d'
     if ([IO.Directory]::Exists($overLimit)) { [IO.Directory]::Delete($overLimit, $true) }
@@ -2154,7 +2201,8 @@ fi
     Check-Run 'WIN-02 PowerShell limit cap+1 watchdog' $overPs2
     Check 'WIN-02 PowerShell limit cap+1 frozen' ((Get-ImmediateNames $overLimit).Count -eq 513)
 
-    # TSV trim and complete-read caps are distinct boundaries.
+    # Every store past BURN_TRIM + BURN_SLACK trims, including one past the 4096-row
+    # parse window, which used to be refused and never trimmed again.
     foreach ($rawCount in @(3967,3968,4096)) {
         $boundaryRoot = Join-Path $stateRoot ("burn-boundary-$rawCount")
         $boundaryConfig = New-StateConfig ("win02-burn-boundary-$rawCount") $boundaryRoot 'burn' $false
@@ -2164,10 +2212,84 @@ fi
         Write-Utf8 $boundaryStore $boundaryLines.ToString()
         $boundaryRun = Invoke-Statusline (Json $statePayload) $boundaryConfig $stateEnvWrite '' 30000
         Check-Run "WIN-02 PowerShell burn raw boundary $rawCount" $boundaryRun
-        $expectedRows = 1500
-        if ($rawCount -eq 4096) { $expectedRows = 4097 }
-        Check "WIN-02 burn raw boundary $rawCount" (([IO.File]::ReadAllLines($boundaryStore, $StrictUtf8)).Count -eq $expectedRows)
+        Check "WIN-02 burn raw boundary $rawCount" (([IO.File]::ReadAllLines($boundaryStore, $StrictUtf8)).Count -eq 1500)
     }
+
+    # A store past the parse window heals identically in both runtimes. Found on a
+    # Windows box whose store never trimmed once and reached 8678 rows. Rows beyond
+    # the window sit at 5% so parsing them would add an out-of-window crossing.
+    $stuckBuilder = New-Object Text.StringBuilder
+    for ($i = 0; $i -lt 4200; $i++) {
+        $stuckPct = '10'
+        if ($i -lt 104) { $stuckPct = '5' }
+        [void]$stuckBuilder.Append((($fixedNow - 4200L + $i).ToString($Invariant) + "`t" + $stuckPct + "`t1015900`n"))
+    }
+    $stuckText = $stuckBuilder.ToString()
+    $stuckStores = @{}
+    foreach ($runtime in @('ps','bash')) {
+        $stuckRoot = Join-Path $stateRoot ("stuck-$runtime")
+        $stuckConfig = New-StateConfig ("win02-stuck-$runtime") $stuckRoot 'burn' $false
+        $stuckPath = Join-Path $stuckRoot 'burn.tsv'
+        Write-Utf8 $stuckPath $stuckText
+        $stuckDump = Join-Path $stuckRoot 'state.txt'
+        $stuckReadEnv = @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW=[string]$fixedNow; CORALLINE_TEST_STATE_DUMP=(Forward-Path $stuckDump) }
+        if ($runtime -eq 'ps') {
+            $stuckRead = Invoke-Statusline (Json $statePayload) $stuckConfig $stuckReadEnv '' 30000
+            $stuckReadPs = $stuckRead
+            $stuckPsState = [IO.File]::ReadAllText($stuckDump, $StrictUtf8) | ConvertFrom-Json
+            Check 'WIN-02 PowerShell stuck store reads its tail as complete' ([bool]$stuckPsState.BurnSnapshotComplete)
+        } else {
+            $stuckRead = Invoke-BashStatusline (Json $statePayload) $stuckConfig $stuckReadEnv
+            Check-Exact 'WIN-02 stuck store read-only output matches Bash' $stuckReadPs $stuckRead
+        }
+        Check-Run "WIN-02 $runtime stuck store read-only" $stuckRead
+        Check "WIN-02 $runtime stuck store read-only leaves the TSV byte exact" ([IO.File]::ReadAllText($stuckPath, $Utf8NoBom) -ceq $stuckText)
+        if ($runtime -eq 'ps') { $stuckWrite = Invoke-Statusline (Json $statePayload) $stuckConfig $stateEnvWrite '' 30000 }
+        else { $stuckWrite = Invoke-BashStatusline (Json $statePayload) $stuckConfig $stateEnvWrite }
+        Check-Run "WIN-02 $runtime stuck store heal" $stuckWrite
+        $stuckRows = [IO.File]::ReadAllLines($stuckPath, $StrictUtf8)
+        Check "WIN-02 $runtime stuck store heals to the newest BURN_TRIM rows" ($stuckRows.Count -eq 1500 -and $stuckRows[0] -ceq "998501`t10.000`t1015900" -and $stuckRows[1499] -ceq "1000000`t41.200`t1015900")
+        $stuckStores[$runtime] = [IO.File]::ReadAllText($stuckPath, $Utf8NoBom)
+    }
+    Check 'WIN-02 stuck store heal is byte-identical across runtimes' ($stuckStores['ps'] -ceq $stuckStores['bash'])
+
+    # Row accept/reject and pct canonicalisation are pinned against the Bash reader:
+    # the implausible sentinel forces a rewrite, and the rewrite holds exactly the
+    # accepted rows in canonical form, so byte equality covers every row below.
+    # A CR-terminated row is deliberately absent: Git Bash's awk reads in text mode
+    # and strips the CR (measured: it keeps such a row), while this reader and awk
+    # on Linux or macOS reject it. Both writers emit LF only.
+    $edgeRows = @(
+        "999001`t10`t1015900", "999002`t010.000`t1015900", "999003`t100.000`t1015900",
+        "999004`t100.5`t1015900", "999005`t100.500`t1015900", "999006`t100.000000`t1015900",
+        "999007`t5.0005`t1015900", "999008`t5.0015`t1015900", "999009`t5.0025001`t1015900",
+        "999010`t099.999`t1015900", "999011`t099.9995`t1015900", "999012`t1e2`t1015900",
+        "999013`t-1`t1015900", "999014`t 5`t1015900", "999015`t5 `t1015900", "0999016`t5`t1015900",
+        "999018`t5`t1015900`t", "999019`t5", "", "999020`t.5`t1015900",
+        "999021`t5.`t1015900", "999022`t0`t1015900", "999023`t00`t1015900", "999024`t000.000`t1015900",
+        "999025`t100.001`t1015900", ("999026`t5`t1015900" + [char]0xE9), "999999999999`t5`t1015900",
+        "999027`t5`t253402300800", "999001`t12`t1015900", "999028`t7.9999995`t1015900",
+        "999029`t42.4445`t1015900", "999030`t5`t99999999", "`t`t", "999031`t5`t1015900"
+    )
+    $edgeText = ($edgeRows -join "`n") + "`n"
+    $edgeStores = @{}
+    foreach ($runtime in @('ps','bash')) {
+        $edgeRoot = Join-Path $stateRoot ("rowedge-$runtime")
+        $edgeConfig = New-StateConfig ("win02-rowedge-$runtime") $edgeRoot 'burn' $false
+        $edgePath = Join-Path $edgeRoot 'burn.tsv'
+        Write-Utf8 $edgePath $edgeText
+        if ($runtime -eq 'ps') { $edgeRun = Invoke-Statusline (Json $statePayload) $edgeConfig $stateEnvWrite '' 30000 }
+        else { $edgeRun = Invoke-BashStatusline (Json $statePayload) $edgeConfig $stateEnvWrite }
+        Check-Run "WIN-02 $runtime row edge rewrite" $edgeRun
+        $edgeStores[$runtime] = [IO.File]::ReadAllText($edgePath, $Utf8NoBom)
+    }
+    if ($edgeStores['ps'] -cne $edgeStores['bash']) {
+        [Console]::Out.WriteLine('DIAG  ps=' + $edgeStores['ps'].Replace("`n", '|'))
+        [Console]::Out.WriteLine('DIAG  bash=' + $edgeStores['bash'].Replace("`n", '|'))
+    }
+    Check 'WIN-02 row edge rewrite is byte-identical across runtimes' ($edgeStores['ps'] -ceq $edgeStores['bash'])
+    Check 'WIN-02 row edge rewrite dropped the sentinel' (-not $edgeStores['ps'].Contains('99999999'))
+
     foreach ($rawCount in @(383,384,512)) {
         $boundaryRoot = Join-Path $stateRoot ("limit-boundary-$rawCount")
         $boundaryConfig = New-StateConfig ("win02-limit-boundary-$rawCount") $boundaryRoot 'limit5h' $true
@@ -2194,7 +2316,9 @@ fi
     $steadyPs = Invoke-Statusline (Json $statePayload) $steadyConfig $stateEnvWrite '' 5000
     Check-Run 'WIN-02 PowerShell 1500-entry steady render' $steadyPs
     Check 'WIN-02 PowerShell 1500-entry steady render under 3s' ($steadyPs.ElapsedMs -lt 3000)
-    Check 'WIN-02 PowerShell 1500-entry steady render trims to 1500 rows' (([IO.File]::ReadAllLines($steadyStore, $StrictUtf8)).Count -eq 1500)
+    # BURN_SLACK (default 500) batches the steady-state trim as in Bash: the append
+    # lands and no rewrite happens until the store passes BURN_TRIM + BURN_SLACK.
+    Check 'WIN-02 PowerShell 1500-entry steady render defers the trim within BURN_SLACK' (([IO.File]::ReadAllLines($steadyStore, $StrictUtf8)).Count -eq 1501)
     $steadyBash = Invoke-BashStatusline (Json $statePayload) $steadyConfig $stateEnvRead
     Check-Run 'WIN-02 Bash 1500-entry steady render' $steadyBash
     Check 'WIN-02 Bash 1500-entry steady render under 3s' ($steadyBash.ElapsedMs -lt 3000)
@@ -2820,6 +2944,144 @@ fi
     Check 'WIN-03 source caches stash/node/python probes' ($source.Contains('$script:StashCacheSet') -and $source.Contains('$script:NodeCacheSet') -and $source.Contains('$script:PythonCacheSet'))
     Check 'WIN-03 state collision derivation is outside state gates' ($source.IndexOf('$AllStatePaths') -lt $source.IndexOf('$BurnStateGate'))
     Assert-NoUnexpectedResidue $win03Root 'WIN-03 float matrix'
+
+    # WIN-92: integer-knob parity (#92-A). For every knob in the plan's table,
+    # every spelling in the canonical rule's rejection/acceptance surface must
+    # render byte-identically in Bash and PowerShell — same spelling in, same
+    # bytes out on both runtimes is exactly what "the same range and the same
+    # fallback" means operationally. `Segments` picks a segment whose render
+    # is sensitive to that knob's normalized value.
+    $win92Payload = Clone-Object $basePayload
+    # The base payload leaves five_hour.resets_at empty, so burn would read only
+    # the 7d window and never touch the 5h rows the burn fixtures below write.
+    # Point the 5h window at the fixtures' reset so their rows actually drive
+    # the render; otherwise every burn case compares two renders that ignore it.
+    $win92BurnPayload = Clone-Object $basePayload
+    $win92BurnPayload.rate_limits.five_hour.used_percentage = '8'
+    $win92BurnPayload.rate_limits.five_hour.resets_at = '1015900'
+    $win92Cases = @(
+        [pscustomobject]@{ Key='VL_BAR_WIDTH';          Segments='ctx';  L=2; Min=0;  Max=64;    Fallback=5 },
+        [pscustomobject]@{ Key='VL_PATH_DEPTH';         Segments='dir';  L=3; Min=1;  Max=256;   Fallback=4 },
+        [pscustomobject]@{ Key='VL_NAME_MAX';           Segments='dir\ git'; L=4; Min=0; Max=4096; Fallback=0 },
+        [pscustomobject]@{ Key='VL_COST_DECIMALS';      Segments='cost'; L=1; Min=0;  Max=9;     Fallback=2 },
+        [pscustomobject]@{ Key='VL_WARN_PCT';           Segments='ctx';  L=3; Min=0;  Max=100;   Fallback=50 },
+        [pscustomobject]@{ Key='VL_HOT_PCT';            Segments='ctx';  L=3; Min=0;  Max=100;   Fallback=75 },
+        [pscustomobject]@{ Key='VL_MAX_LINES';          Segments='model\ ctx\ cost\ lines'; L=2; Min=1; Max=64;    Fallback=3; Extra=@('VL_LAYOUT=auto','VL_WRAP_MARGIN=0'); Env=@{COLUMNS='30'} },
+        [pscustomobject]@{ Key='VL_WRAP_MARGIN';        Segments='model\ ctx\ cost\ lines'; L=5; Min=0; Max=32767; Fallback=4; Extra=@('VL_LAYOUT=auto','VL_MAX_LINES=3'); Env=@{COLUMNS='30'} },
+        [pscustomobject]@{ Key='CORALLINE_BURN_WINDOW'; Segments='burn'; L=5; Min=60; Max=86400; Fallback=600; IsBurn=$true },
+        [pscustomobject]@{ Key='BURN_TRIM';             Segments='burn'; L=4; Min=1;  Max=3000;  Fallback=1500; IsBurn=$true },
+        [pscustomobject]@{ Key='BURN_SLACK';            Segments='burn'; L=4; Min=0;  Max=1000;  Fallback=500;  IsBurn=$true }
+    )
+    $win92Bad = @('', '+5', '-0', ' 5', '5 ', '1e1', 'x')
+    $win92Idx = 0
+    foreach ($case in $win92Cases) {
+        $spellings = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($b in $win92Bad) { [void]$spellings.Add($b) }
+        [void]$spellings.Add(('9' * ($case.L + 1)))     # L+1 digits: too long
+        [void]$spellings.Add([string]$case.Min)          # boundary: accepted
+        [void]$spellings.Add([string]$case.Max)          # boundary: accepted
+        if ($case.Min -gt 0) { [void]$spellings.Add([string]($case.Min - 1)) }  # just under min
+        $plus1 = [string]($case.Max + 1)
+        if ($plus1.Length -le $case.L) { [void]$spellings.Add($plus1) }          # just over max
+        if ($case.Min -le 5 -and $case.Max -ge 5) {
+            [void]$spellings.Add('5')
+            if ($case.L -ge 2) { [void]$spellings.Add('05') }
+            if ($case.L -ge 3) { [void]$spellings.Add('005') }
+        }
+        $win92Root = Join-Path $TempRoot ('win92-' + $case.Key)
+        [void][IO.Directory]::CreateDirectory($win92Root)
+        $env = @{}
+        if ($case.Env) { $env = $case.Env }
+        if ($case.IsBurn) {
+            # Seed two rows straddling a crossing inside a 90s window so an
+            # accepted CORALLINE_BURN_WINDOW of 90 reads differently from the
+            # fallback (600), and BURN_TRIM/BURN_SLACK differ visibly too
+            # small a trim (well below 2 rows) forces a rewrite on a mutable
+            # read, which a byte-parity comparison on a read-only render does
+            # not need — CORALLINE_NO_SAMPLE=1 keeps both runtimes read-only.
+            $burnFixture = Join-Path $win92Root 'burn.tsv'
+            Write-Utf8 $burnFixture "999940`t6`t1015900`n1000000`t8`t1015900`n"
+            $env = $env + @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW='1000000' }
+        }
+        foreach ($spelling in $spellings) {
+            $win92Idx++
+            # Parenthesised: PowerShell's comma binds tighter than +, so without them the
+            # three settings would join into one line that only Bash accepts.
+            $lines = @(('VL_SEGMENTS=' + $case.Segments), 'VL_CLOCK=off', ($case.Key + "='" + $spelling + "'"))
+            if ($case.Extra) { $lines += $case.Extra }
+            if ($case.IsBurn) { $lines += ("BURN_FILE='" + (Forward-Path (Join-Path $win92Root 'burn.tsv')) + "'") }
+            $cfg = New-Config ('win92-' + $win92Idx) $lines
+            $label = 'WIN-92 ' + $case.Key + " '" + $spelling + "'"
+            $casePayload = $win92Payload
+            if ($case.IsBurn) { $casePayload = $win92BurnPayload }
+            $psRun = Invoke-Statusline (Json $casePayload) $cfg $env '' 8000
+            $bashRun = Invoke-BashStatusline (Json $casePayload) $cfg $env
+            Check-Run ($label + ' PowerShell') $psRun
+            Check-Run ($label + ' Bash') $bashRun
+            Check-Exact ($label + ' parity') $psRun $bashRun
+        }
+    }
+
+    # 92-B: a CRLF-terminated burn row is rejected by both runtimes. Same
+    # fixture as Bash's "5h active state" unit test (test/test-burn.sh),
+    # which is known to render an active ETA over \n rows; \r\n rows must
+    # render as though the file held no valid rows at all, on both runtimes,
+    # and that must differ from the \n rendering (proof the rows were
+    # excluded, not just parsed into some other, coincidentally-equal value).
+    $win92CrRoot = Join-Path $TempRoot 'win92-cr'
+    [void][IO.Directory]::CreateDirectory($win92CrRoot)
+    $win92CrFile = Join-Path $win92CrRoot 'burn.tsv'
+    $win92CrConfig = New-Config 'win92-cr' @('VL_SEGMENTS=burn', 'VL_CLOCK=off', ("BURN_FILE='" + (Forward-Path $win92CrFile) + "'"))
+    $win92CrEnv = @{ CORALLINE_NO_SAMPLE='1'; CORALLINE_TEST_NOW='1000360' }
+    [IO.File]::WriteAllText($win92CrFile, "1000000`t6`t1015900`r`n1000060`t7`t1015900`r`n1000300`t8`t1015900`r`n1000360`t8`t1015900`r`n", $Utf8NoBom)
+    $win92CrPs = Invoke-Statusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv '' 8000
+    $win92CrBash = Invoke-BashStatusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv
+    Check-Run 'WIN-92 CRLF burn row PowerShell' $win92CrPs
+    Check-Run 'WIN-92 CRLF burn row Bash' $win92CrBash
+    Check-Exact 'WIN-92 CRLF burn row parity' $win92CrPs $win92CrBash
+
+    [IO.File]::WriteAllText($win92CrFile, "1000000`t6`t1015900`n1000060`t7`t1015900`n1000300`t8`t1015900`n1000360`t8`t1015900`n", $Utf8NoBom)
+    $win92LfPs = Invoke-Statusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv '' 8000
+    $win92LfBash = Invoke-BashStatusline (Json $win92BurnPayload) $win92CrConfig $win92CrEnv
+    Check-Run 'WIN-92 LF burn row PowerShell' $win92LfPs
+    Check-Run 'WIN-92 LF burn row Bash' $win92LfBash
+    Check-Exact 'WIN-92 LF burn row parity' $win92LfPs $win92LfBash
+    Check 'WIN-92 CRLF rows are excluded (differ from the LF-row render)' ($win92CrPs.Stdout -ne $win92LfPs.Stdout)
+
+    # 92-A: HOT<WARN resets BOTH to their defaults in both runtimes (not just
+    # the one out of order); a kept, non-inverted pair (including equal) is
+    # left alone. ctx% =62.4 (New-Payload) sits between the two thresholds
+    # picked below, so the reset flips which color band it falls into.
+    # A CR decoded from $'...' quoting must be refused, not stripped to a valid
+    # digit first: PowerShell used to remove control characters before
+    # validating integer knobs, so $'9\r' became 9 while Bash fell back to 5.
+    $win92CrValueConfig = New-Config 'win92-cr-value' @('VL_SEGMENTS=ctx', 'VL_CLOCK=off', "VL_BAR_WIDTH=`$'9\r'", "BURN_TRIM=`$'9\r'")
+    $win92CrValuePs = Invoke-Statusline (Json $win92Payload) $win92CrValueConfig @{} '' 8000
+    $win92CrValueBash = Invoke-BashStatusline (Json $win92Payload) $win92CrValueConfig @{}
+    Check-Run 'WIN-92 CR-decoded knob value PowerShell' $win92CrValuePs
+    Check-Run 'WIN-92 CR-decoded knob value Bash' $win92CrValueBash
+    Check-Exact 'WIN-92 CR-decoded knob value parity' $win92CrValuePs $win92CrValueBash
+    # A trailing LF must be refused too: .NET's $ matches before a final newline.
+    $win92LfValueConfig = New-Config 'win92-lf-value' @('VL_SEGMENTS=ctx', 'VL_CLOCK=off', "VL_BAR_WIDTH=`$'9\n'")
+    $win92LfValuePs = Invoke-Statusline (Json $win92Payload) $win92LfValueConfig @{} '' 8000
+    $win92LfValueBash = Invoke-BashStatusline (Json $win92Payload) $win92LfValueConfig @{}
+    Check-Run 'WIN-92 LF-decoded knob value PowerShell' $win92LfValuePs
+    Check-Run 'WIN-92 LF-decoded knob value Bash' $win92LfValueBash
+    Check-Exact 'WIN-92 LF-decoded knob value parity' $win92LfValuePs $win92LfValueBash
+
+    $win92HotWarnCases = @(
+        [pscustomobject]@{ Name='inverted-resets'; Warn=60; Hot=40 },
+        [pscustomobject]@{ Name='equal-kept'; Warn=60; Hot=60 },
+        [pscustomobject]@{ Name='ordinary-kept'; Warn=30; Hot=80 }
+    )
+    foreach ($hw in $win92HotWarnCases) {
+        $cfg = New-Config ('win92-hotwarn-' + $hw.Name) @('VL_SEGMENTS=ctx', 'VL_CLOCK=off', ('VL_WARN_PCT=' + $hw.Warn), ('VL_HOT_PCT=' + $hw.Hot))
+        $psRun = Invoke-Statusline (Json $win92Payload) $cfg @{} '' 8000
+        $bashRun = Invoke-BashStatusline (Json $win92Payload) $cfg @{}
+        Check-Run ('WIN-92 HOT/WARN ' + $hw.Name + ' PowerShell') $psRun
+        Check-Run ('WIN-92 HOT/WARN ' + $hw.Name + ' Bash') $bashRun
+        Check-Exact ('WIN-92 HOT/WARN ' + $hw.Name + ' parity') $psRun $bashRun
+    }
 
 } finally {
     try { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction Stop } catch { }

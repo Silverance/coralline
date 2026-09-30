@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Integration tests for the fork's grafted segments and combined-segment options
 # that the upstream merge re-introduced and which the existing suite never covered:
-#   - grafted segments: effort, vim, cache, worktree, version, session, sha, custom
+#   - grafted segments: effort, vim, worktree, version, session, sha, custom
+#     (cache is upstream's segment now; test/test-cache.sh covers it, and the
+#     case below only checks that its fields still land after this fork's block)
 #   - per-model rate limits: limit7ds (Sonnet), limit7do (Opus)
 #   - VL_CTX_TOKENS modes: off / io / full
 #   - VL_LIMIT_RESET modes: countdown / clock / both
@@ -60,7 +62,7 @@ out=$(render "effort");  has 'ψ high'     "$out" && check "effort: psi high"   
 out=$(render "vim");     has '⌨ NORMAL'   "$out" && check "vim: NORMAL"             1 || check "vim: NORMAL"             0
 out=$(render "version"); has 'v2.1.160'   "$out" && check "version: v2.1.160"       1 || check "version: v2.1.160"       0
 out=$(render "session"); has '#abcd1234'  "$out" && check "session: #abcd1234"      1 || check "session: #abcd1234"      0
-out=$(render "cache");   has '↯ 96%'      "$out" && check "cache: hit rate 96%"     1 || check "cache: hit rate 96%"     0
+out=$(render "cache");   has '⛁ 98%'      "$out" && check "cache: fields after the fork's block" 1 || check "cache: fields after the fork's block" 0
 out=$(render "worktree")
   { has '⧉ demo-wt' "$out" && has 'feat/x' "$out"; } && check "worktree: name + branch" 1 || check "worktree: name + branch" 0
 out=$(render "custom" 'VL_CUSTOM_CMD="echo hello-custom"')

@@ -72,6 +72,7 @@ VL_BAR_EMPTY="▱"
 # out of alignment (#47). Override with characters your terminal font carries.
 VL_CTX_GLYPH="⬡"                # glyph for the ctx segment (main bar and subagent rows)
 VL_PROJECT_GLYPH="⬢"            # glyph for the project segment
+VL_CACHE_GLYPH="⛁"              # glyph for the cache segment
 VL_CLOCK="12h"                  # 12h | 24h | off
 VL_CLOCK_SECONDS=1
 VL_PATH_DEPTH=4                 # collapse paths deeper than this
@@ -104,6 +105,7 @@ VL_SUB_SEGMENTS="name model ctx elapsed"  # panel-row segment list (subseg_*)
 VL_BG_SUB_MODEL=""              # panel-row colors; empty → fall back to the
 VL_BG_SUB_CTX=""                #   main-bar counterparts (model/ctx/duration)
 VL_BG_SUB_ELAPSED=""
+VL_BG_SUB_EFFORT=""            #   (effort → VL_BG_EFFORT)
 # subseg_name tints the label by task status out of the main VL_FG_* palette,
 # which is tuned for the gauge segments' dark backgrounds. On a light name pill
 # those colors wash out (down to 1.0:1), so the pill takes that same dark ground
@@ -129,6 +131,12 @@ VL_BURN_GLYPH="↗"               # plain-Unicode, arrow family (kept in VL_ASCI
 VL_BG_BURN=""                   # empty → inherits VL_BG_5H at the use site
 BURN_FILE="${CORALLINE_BURN_FILE:-$CORALLINE_DIR/burn-5h.tsv}"
 BURN_TRIM=1500                  # internal: max rows kept in the sample file
+BURN_SLACK=500                  # internal: rows past BURN_TRIM tolerated before a trim rewrite.
+                                # Batches the steady-state trim: at the cap, appends land for
+                                # ~BURN_SLACK seconds before one render rewrites, instead of every
+                                # render rewriting every second. 3000+1000 (both maxima) stays below
+                                # the reader's 4096-row parse window, so a store past that window
+                                # always satisfies the trim condition and is healed from its tail.
 
 # Cross-session limit sync (opt-in). Claude Code only re-renders a session's
 # statusline on activity, and the rate-limit % in each render's JSON is that
@@ -204,6 +212,51 @@ VL_FG_OK=114
 VL_FG_WARN=179
 VL_FG_HOT=167
 
+# Canonical integer-knob parse (mirrors PS1's Get-BoundedInt): the raw value
+# must match ^[0-9]{1,L}$ (no sign, no whitespace, no exponent), is read as
+# decimal (10# forces base 10 so a leading zero never reads as octal), and
+# must lie in [min, max]; anything else takes the fallback. printf -v writes
+# through a caller-named global — no $(...) subshell, no fork.
+knob_bounded() {  # $1=raw $2=maxlen $3=min $4=max $5=fallback $6=out-var
+  local raw="$1" len="$2" min="$3" max="$4" fb="$5" var="$6" n
+  case "$raw" in
+    # Listed, not a 0-9 range: a range follows the locale's collation, and a
+    # non-ASCII digit reaching 10# below aborts the whole render.
+    (''|*[!0123456789]*) printf -v "$var" '%s' "$fb"; return ;;
+  esac
+  if [ "${#raw}" -gt "$len" ]; then printf -v "$var" '%s' "$fb"; return; fi
+  n=$((10#$raw))
+  if [ "$n" -lt "$min" ] || [ "$n" -gt "$max" ]; then printf -v "$var" '%s' "$fb"
+  else printf -v "$var" '%s' "$n"; fi
+}
+
+# Applies knob_bounded to every integer knob, then the HOT<WARN reset — called
+# once, right after the config (and any theme it sources) has run and before
+# any consumer reads these knobs. Replaces the three ad-hoc checks that used
+# to live inside state_gate (BURN_WINDOW, BURN_TRIM, BURN_SLACK), which only
+# ran when a burn/limit segment was active. A single function (rather than
+# bare top-level statements) so tests can extract and drive it directly.
+knob_validate_all() {
+  knob_bounded "$VL_BAR_WIDTH"          2 0   64    5 VL_BAR_WIDTH
+  knob_bounded "$VL_PATH_DEPTH"         3 1   256   4 VL_PATH_DEPTH
+  knob_bounded "$VL_NAME_MAX"           4 0   4096  0 VL_NAME_MAX
+  knob_bounded "$VL_COST_DECIMALS"      1 0   9     2 VL_COST_DECIMALS
+  knob_bounded "$VL_WARN_PCT"           3 0   100   50 VL_WARN_PCT
+  knob_bounded "$VL_HOT_PCT"            3 0   100   75 VL_HOT_PCT
+  knob_bounded "$VL_MAX_LINES"          2 1   64    3 VL_MAX_LINES
+  knob_bounded "$VL_WRAP_MARGIN"        5 0   32767 4 VL_WRAP_MARGIN
+  knob_bounded "$CORALLINE_BURN_WINDOW" 5 60  86400 600  CORALLINE_BURN_WINDOW
+  knob_bounded "$BURN_TRIM"             4 1   3000  1500 BURN_TRIM
+  knob_bounded "$BURN_SLACK"            4 0   1000  500  BURN_SLACK
+  # Same cross-knob rule as PS1 (statusline.ps1, right after its own
+  # Get-BoundedInt calls): an inverted pair resets both to their defaults,
+  # not just one.
+  if [ "$VL_HOT_PCT" -lt "$VL_WARN_PCT" ]; then
+    VL_WARN_PCT=50
+    VL_HOT_PCT=75
+  fi
+}
+
 # ── Load user config ─────────────────────────────────────────────────────────
 VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
 # Fingerprint of the palette subseg_name draws with, so a config that retinted any
@@ -212,6 +265,7 @@ VL_CONF="${CORALLINE_CONFIG:-$HOME/.claude/coralline.conf}"
 _VL_STOCK="$VL_BG_DIR|$VL_FG_TEXT|$VL_FG_OK|$VL_FG_HOT|$VL_FG_DIM"
 _VL_STOCK_BAR="$VL_BG_BAR|$VL_LEAN_BG"
 [ -f "$VL_CONF" ] && . "$VL_CONF"
+knob_validate_all
 
 # Subagent name pill. Its colors have to be resolved here, after the whole config
 # has run, because they are only safe while the palette they were solved against
@@ -650,12 +704,8 @@ state_paths_revalidate() {  # every mutation rechecks the cached canonical ident
 
 state_gate() {  # canonicalize one render's values and state namespaces
   _STATE_MUTATE=1; [ "${CORALLINE_NO_SAMPLE:-0}" = 1 ] && _STATE_MUTATE=0
-  case "$CORALLINE_BURN_WINDOW" in (''|*[!0-9]*) CORALLINE_BURN_WINDOW=600 ;; esac
-  [ "${#CORALLINE_BURN_WINDOW}" -le 5 ] && [ "$CORALLINE_BURN_WINDOW" -ge 60 ] 2>/dev/null \
-    && [ "$CORALLINE_BURN_WINDOW" -le 86400 ] 2>/dev/null || CORALLINE_BURN_WINDOW=600
-  case "$BURN_TRIM" in (''|*[!0-9]*) BURN_TRIM=1500 ;; esac
-  [ "${#BURN_TRIM}" -le 4 ] && [ "$BURN_TRIM" -ge 1 ] 2>/dev/null \
-    && [ "$BURN_TRIM" -le 3000 ] 2>/dev/null || BURN_TRIM=1500
+  # CORALLINE_BURN_WINDOW / BURN_TRIM / BURN_SLACK are validated once, right
+  # after the config loads (see knob_bounded above), not here.
 
   _CUR5_VALID=0; _CUR7_VALID=0; _CUR_BURN_VALID=0
   _CUR5_PCT=0; _CUR5_CANON=""; _CUR5_TSV=""; _CUR5_RST=0
@@ -696,11 +746,130 @@ state_gate() {  # canonicalize one render's values and state namespaces
   _STATE_READY=1
 }
 
+# Per-(second, window, pct) burn-write election. N concurrent sessions on one
+# account share one current 5h window and would otherwise each append a
+# near-identical row every second, keeping the file permanently past BURN_TRIM
+# so that every render pays a whole-file rewrite; measured at n=16 that write
+# path alone is ~600ms CPU/s aggregate. The reader keeps only the MAX pct per
+# (reset, sample) row (add_obs), so a reading at or below a pct already
+# claimed for this (second, window) is exactly the row dedup would discard: a
+# session appends only when it carries new information. Same-pct sessions (the
+# storm case) collapse to one writer; a session with a HIGHER reading — e.g.
+# the one actively burning while another idles on a stale snapshot — always
+# still lands, and a session on a DIFFERENT window claims a different token,
+# so the persisted series is exactly what every-session writes produce.
+# Limit-store publishing (rl_sample) is deliberately NOT elected: those
+# entries are idempotent bounded mkdirs with no rewrite cost, and any session
+# may hold a newer window that must be able to reach the store.
+# Tokens live beside the burn file and carry its name as prefix
+# (<burnfile>.<epoch>.<reset>.<pctmilli>.tick), mirroring burn_tmp_sweep's
+# provenance rule: in a shared parent directory only files that name THIS
+# store are ever considered ours, so the sweep cannot touch foreign files.
+# The claim is a noclobber `:` redirect (O_CREAT|O_EXCL, no fork). Losing, and
+# every guard failure around the claim, leaves the store untouched; only a
+# claim that fails while the token is genuinely absent (e.g. parent not yet
+# created) fails OPEN to today's every-session-writes behavior, because the
+# mutations downstream re-run their own TOCTOU guards and a fresh store must
+# keep sampling from its first render.
+state_burn_lead() {  # → 0 iff this render must run the burn write path
+  case "${_BURN_LEAD:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  _BURN_LEAD=0
+  [ "${_STATE_BURN_SAFE:-0}" = 1 ] || return 1
+  local slot tok had_c=0 won=0 f n e r p c=0 best=-1
+  # Same discipline as every store mutation: revalidate immediately before
+  # touching the path. If revalidation cannot pass, fail open without creating
+  # or deleting anything here.
+  if ! state_paths_revalidate; then _BURN_LEAD=1; return 0; fi
+  if [ "${_CUR_BURN_VALID:-0}" = 1 ]; then
+    slot="$_SB_BASE.${NOW}.${_CUR_BURN_RST}"
+    tok="$slot.${_CUR_BURN_PCT}.tick"
+    # Lose only to a claim that already covers this reading: the highest pct
+    # claimed for this (second, window) at or above ours makes our row
+    # redundant.
+    for f in "$slot".*.tick; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      p=${f#"$slot".}; p=${p%.tick}
+      # Length caps mirror state_epoch's width rule: a planted name with an
+      # oversized digit run must not reach [ -gt ] (integer overflow would
+      # leak an error line onto the render's stderr).
+      case "$p" in (''|*[!0-9]*) continue ;; esac
+      [ "${#p}" -le 6 ] || continue
+      [ "$p" -gt "$best" ] && best=$p
+    done
+    # A covering claim (pct at or above ours) is the one loss reason a
+    # follower may trust: it proves a winner is computing this second, so the
+    # published estimate is safe to adopt (_BURN_LOST gates burn_est_adopt).
+    [ "$_CUR_BURN_PCT" -gt "$best" ] || { _BURN_LOST=1; return 1; }
+  else
+    # No reading of our own: maintenance-only claim under the reserved
+    # window/pct 0.0, so trim, healing, and the tmp sweep never starve while
+    # every rendering session happens to lack a current 5h payload. Any
+    # same-second claimant (any window) makes maintenance redundant — a real
+    # claimant runs the same mutate path — and burn_sample's own gate keeps a
+    # maintenance winner from ever appending a row.
+    for f in "$_SB_BASE.${NOW}".*.tick; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      return 1
+    done
+    tok="$_SB_BASE.${NOW}.0.0.tick"
+  fi
+  # A pre-existing symlink (or other oddity) planted at the token name is not
+  # followed and not deleted; this render just loses the tick.
+  state_no_symlink_path "$tok" && [ "$_SNP" = "$tok" ] || return 1
+  case $- in *C*) had_c=1 ;; esac
+  set -C
+  if : 2>/dev/null > "$tok"; then won=1; fi
+  [ "$had_c" = 1 ] || set +C
+  if [ "$won" != 1 ]; then
+    # EEXIST from a regular file: another session claimed this exact reading,
+    # which also counts as a covering claim for adoption purposes.
+    if [ -f "$tok" ] && [ ! -L "$tok" ]; then _BURN_LOST=1; return 1; fi
+    # A non-file object raced in: lose without trusting it.
+    if [ -e "$tok" ] || [ -L "$tok" ]; then return 1; fi
+    # Anything else (missing parent on a fresh store, transient fs error):
+    # fail open so sampling never silently stops.
+    _BURN_LEAD=1; return 0
+  fi
+  _BURN_LEAD=1
+  # Winner duty: clear other seconds' tokens. A token is swept only once it is
+  # at least 8s in the past: a render's NOW is fixed at startup, so a straggler
+  # still finishing second T must find T's token intact while the second-T+1
+  # winner runs, or it would reclaim T and double-write (observed in the n=16
+  # concurrency regression; 8s outlives any render that is not already
+  # pathological). Future-dated tokens (backwards clock step) drain
+  # immediately. Same-NOW tokens stay. Only plain non-symlink files prefixed
+  # by this store's own name with a strictly numeric epoch.window.pct shape
+  # are ever deleted, and the identities are revalidated again before the
+  # batched rm (mirrors burn_tmp_sweep's cap-and-batch pattern).
+  state_paths_revalidate || return 0
+  set --
+  for f in "$_SB_BASE".*.tick; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    n=${f#"$_SB_BASE".}; n=${n%.tick}
+    e=${n%%.*}
+    case "$e" in (''|*[!0-9]*) continue ;; esac
+    [ "${#e}" -le 12 ] || continue
+    n=${n#*.}
+    case "$n" in *.*) ;; *) continue ;; esac
+    r=${n%%.*}; p=${n#*.}
+    case "$r" in (''|*[!0-9]*) continue ;; esac
+    [ "${#r}" -le 12 ] || continue
+    case "$p" in (''|*[!0-9]*) continue ;; esac
+    [ "${#p}" -le 6 ] || continue
+    [ "$e" -le "$NOW" ] && [ "$e" -ge $(( NOW - 8 )) ] && continue
+    set -- "$@" "$f"; c=$(( c + 1 ))
+    [ "$c" -ge 8 ] && break
+  done
+  [ "$c" -gt 0 ] && rm -f "$@" 2>/dev/null
+  return 0
+}
+
 burn_sample() {  # append one canonical validated 5h row; $1=sample $2=pct $3=reset
   local parent
   _BURN_APPENDED=0
   [ "${_STATE_MUTATE:-0}" = 1 ] && [ "${_STATE_BURN_SAFE:-0}" = 1 ] \
     && [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
+  state_burn_lead || return 0
   [ "$1" = "$_CUR_BURN_SAMP" ] && [ "$2" = "$_CUR_BURN_TSV" ] && [ "$3" = "$_CUR_BURN_RST" ] || return 0
   parent="${_SB_BASE%/*}"; [ -n "$parent" ] || parent=/
   if [ ! -d "$parent" ]; then
@@ -874,9 +1043,35 @@ burn_tmp_sweep() {  # remove trim temporaries orphaned by killed renders
   return 0
 }
 
+# The single parser for one "state span delta latest ttr" estimator line.
+# burn_eta_5h feeds it the awk's stdout; burn_est_adopt feeds it a line
+# reconstructed from a published estimate. Exactly one validator existing is a
+# deliberate security property: _B5_ETA and _B5_TTR flow into bash arithmetic
+# downstream, so every producer must pass this same gate.
+burn_b5_line() {  # → _B5_* from one estimator line; 1 = line rejected
+  local state span delta latest ttr
+  read -r state span delta latest ttr <<EOF
+$1
+EOF
+  case "$state" in
+    (active)
+      case "$span$delta$latest$ttr" in (''|*[!0-9]*) return 1 ;; esac
+      [ "$span" -gt 0 ] && [ "$delta" -gt 0 ] || return 1
+      state_rate10 $(( delta * 10000000000 )) "$span"; _B5_RATE=$_RATE10
+      state_round_even $(( (100000 - latest) * span )) $(( delta * 1000 )) || return 1
+      _B5_STATE=active; _B5_ETA=$_RE; _B5_TTR=$ttr
+      ;;
+    (idle|warming)
+      case "$ttr" in (''|*[!0-9]*) ttr=0 ;; esac
+      _B5_STATE=$state; _B5_TTR=$ttr
+      ;;
+    (*) return 1 ;;
+  esac
+}
+
 burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
-  local mutate="${1:-0}" src=/dev/null tmp="" write_tmp=0 out="" rc state span delta latest ttr
-  _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0
+  local mutate="${1:-0}" src=/dev/null tmp="" write_tmp=0 out="" rc
+  _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0; _B5_RAW=""
   if [ "${_STATE_BURN_SAFE:-0}" = 1 ] && state_path_object "$_SB_BASE" f; then src=$_SB_BASE; fi
   if [ "$mutate" = 1 ] && [ "$src" != /dev/null ]; then
     burn_tmp_sweep
@@ -884,8 +1079,9 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     if state_paths_revalidate && state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ] \
        && [ ! -e "$tmp" ] && [ ! -L "$tmp" ]; then write_tmp=1; fi
   fi
-  out=$(LC_ALL=C awk -F '\t' -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
-    -v trim="$BURN_TRIM" -v maxahead="$RL_MAX_5H" -v mutate="$write_tmp" -v tmp="$tmp" \
+  out=$(LC_ALL=C awk -F '\t' -v BINMODE=3 -v now="$NOW" -v win="$CORALLINE_BURN_WINDOW" \
+    -v trim="$BURN_TRIM" -v slack="$BURN_SLACK" \
+    -v maxahead="$RL_MAX_5H" -v mutate="$write_tmp" -v tmp="$tmp" \
     -v curvalid="${_CUR_BURN_VALID:-0}" -v csamp="${_CUR_BURN_SAMP:-0}" \
     -v cpct="${_CUR_BURN_PCT:-0}" -v crst="${_CUR_BURN_RST:-0}" '
     function epoch(raw, value) {
@@ -930,17 +1126,25 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     }
     {
       physical++; bytes += length($0) + 1
-      if (physical > 4096 || bytes > 1048576 || length($0) > 4096) { incomplete = 1; exit }
-      nf = split($0, f, "\t")
-      if (nf != 3) next
-      s = epoch(f[1]); p = pct_milli(f[2]); r = epoch(f[3])
-      if (s < 0 || p < 0 || r < 0) next
-      if (s > now + 300 || r < s || r > now + maxahead) { heal = 1; next }
-      add_obs(r, s, p)
+      if (bytes > 1048576 || length($0) > 4096) { incomplete = 1; exit }
+      ring[physical % 4096] = $0
     }
     END {
       if (incomplete) { print "incomplete"; exit }
-      if (mutate && (physical > trim || heal)) {
+      # Only the newest 4096 physical rows are parsed. A store holding more (a
+      # render cancelled after its append but before its trim leaves one row
+      # behind, and at a 1 s refresh that repeats every tick) used to be refused
+      # outright and so was never trimmed again; physical now exceeds every
+      # trim + slack, so the rewrite below heals it from the tail.
+      for (k = (physical > 4096 ? physical - 4095 : 1); k <= physical; k++) {
+        nf = split(ring[k % 4096], f, "\t")
+        if (nf != 3) continue
+        s = epoch(f[1]); p = pct_milli(f[2]); r = epoch(f[3])
+        if (s < 0 || p < 0 || r < 0) continue
+        if (s > now + 300 || r < s || r > now + maxahead) { heal = 1; continue }
+        add_obs(r, s, p)
+      }
+      if (mutate && (physical > trim + slack || heal)) {
         lo = n - trim + 1; if (lo < 1) lo = 1
         printf "%s", "" > tmp
         for (i = lo; i <= n; i++) printf "%.0f\t%s\t%.0f\n", sm[i], canon(pc[i]), rs[i] >> tmp
@@ -988,22 +1192,8 @@ burn_eta_5h() {  # → _B5_* from canonical TSV; $1=allow trim/heal mutation
     fi
   fi
   [ "$rc" -eq 0 ] || return 0
-  read -r state span delta latest ttr <<EOF
-$out
-EOF
-  case "$state" in
-    (active)
-      case "$span$delta$latest$ttr" in (''|*[!0-9]*) return 0 ;; esac
-      [ "$span" -gt 0 ] && [ "$delta" -gt 0 ] || return 0
-      state_rate10 $(( delta * 10000000000 )) "$span"; _B5_RATE=$_RATE10
-      state_round_even $(( (100000 - latest) * span )) $(( delta * 1000 )) || return 0
-      _B5_STATE=active; _B5_ETA=$_RE; _B5_TTR=$ttr
-      ;;
-    (idle|warming)
-      case "$ttr" in (''|*[!0-9]*) ttr=0 ;; esac
-      _B5_STATE=$state; _B5_TTR=$ttr
-      ;;
-  esac
+  burn_b5_line "$out" || return 0
+  _B5_RAW=$out
 }
 
 burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
@@ -1017,9 +1207,110 @@ burn_eta_7d() {  # → _B7_*; $1=pct_milli $2=reset epoch
   state_round_even $(( (100000 - pct) * elapsed )) "$pct"; _B7_ETA=$_RE
 }
 
+# Cross-session estimate sharing. The election winner already paid for the
+# full TSV parse; publishing its validated result lets every same-second loser
+# skip that parse entirely (the read side is ~75ms of a 141ms state-enabled
+# render at n=16 — the dominant multi-session cost after the write election).
+# The published file is display-only derived data with the TSV as the source
+# of truth: ANY anomaly on the read side falls back to the full parse.
+# Publish is rename-only through the store's tmp discipline — never an
+# in-place write, which would follow a planted hardlink and tear reads. The
+# tmp reuses "$_SB_BASE".$$.tmp strictly AFTER burn_eta_5h's own trim tmp
+# lifecycle has ended (burn_estimate calls publish only once burn_eta_5h has
+# returned), so burn_tmp_sweep's <base>.<digits>.tmp rule covers orphans from
+# a killed render. Fork budget: one mv per second per store, paid by the
+# winner, replacing N-1 whole-file awk parses.
+burn_est_publish() {  # winner only: publish "<now> <maxrst> <state> <span> <delta> <latest>"
+  [ "${_CUR_BURN_VALID:-0}" = 1 ] || return 0
+  [ -n "${_B5_RAW:-}" ] || return 0
+  local est="$_SB_BASE.est" tmp="$_SB_BASE.$$.tmp" s sp d l t p had_c=0 won=0
+  state_paths_revalidate || return 0
+  # The est file is a seventh state object outside state_paths_validate's
+  # six-path distinctness matrix; refuse to publish over any configured
+  # namespace (state_same_path is conservative: unsure means same).
+  for p in "$_SB_BASE" "$_SB_ROOT" "$_SL5_BASE" "$_SL5_ROOT" "$_SL7_BASE" "$_SL7_ROOT"; do
+    if state_same_path "$est" "$p"; then return 0; fi
+  done
+  # A symlink or directory planted at the est name is not followed, not
+  # deleted, and aborts the publish; same rule as the election tokens.
+  state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] || return 0
+  state_path_leaf "$est" f || return 0
+  state_no_symlink_path "$tmp" && [ "$_SNP" = "$tmp" ] || return 0
+  [ ! -e "$tmp" ] && [ ! -L "$tmp" ] || return 0
+  read -r s sp d l t <<EOF
+$_B5_RAW
+EOF
+  case $- in *C*) had_c=1 ;; esac
+  set -C
+  if printf '%s %s %s %s %s %s\n' "$NOW" $(( NOW + ${_B5_TTR:-0} )) "$s" "$sp" "$d" "$l" \
+       2>/dev/null > "$tmp"; then won=1; fi
+  [ "$had_c" = 1 ] || set +C
+  [ "$won" = 1 ] || return 0
+  if state_paths_revalidate && state_no_symlink_path "$est" && [ "$_SNP" = "$est" ] \
+     && state_path_leaf "$est" f; then
+    mv -f "$tmp" "$est" 2>/dev/null && return 0
+  fi
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+burn_est_adopt() {  # → 0 iff _B5_* adopted from a fresh, fully validated estimate
+  local est="$_SB_BASE.est" LC_ALL=C pub rst s sp d l t
+  # Same defaults burn_eta_5h starts from: the adopter replaces that call
+  # entirely, and downstream comparisons assume every _B5_* is populated.
+  _B5_STATE=warming; _B5_ETA=inf; _B5_RATE="0.0000000000"; _B5_TTR=0; _B5_RAW=""
+  [ "${_STATE_BURN_SAFE:-0}" = 1 ] || return 1
+  state_path_object "$est" f || return 1
+  [ -f "$est" ] && [ ! -L "$est" ] || return 1
+  # -n (not -N: that is bash 4.1+) caps how much of a hostile oversized file
+  # a render will ever ingest; trailing junk lands in the last field and
+  # fails its digit check, so a malformed line is rejected, never truncated
+  # into a plausible one.
+  read -r -n 128 pub rst s sp d l < "$est" 2>/dev/null || :
+  # Every field is validated before it reaches any arithmetic context; the
+  # published values bypass the awk whose internal caps normally guarantee
+  # these bounds, so the reader must re-impose them itself.
+  state_epoch "${pub:-}" 12 || return 1; pub=$_SE_VALUE
+  state_epoch "${rst:-}" 12 || return 1; rst=$_SE_VALUE
+  [ "$pub" -le "$NOW" ] && [ "$pub" -ge $(( NOW - 3 )) ] || return 1
+  # The TSV parser heals a reset beyond NOW + RL_MAX_5H as implausible, so a
+  # record carrying one is a record no parse produced. Without this the cache
+  # is materially weaker than the file it summarizes: the same planted reset
+  # renders warming through the TSV and an adopted active estimate through
+  # the cache.
+  [ "$rst" -le $(( NOW + RL_MAX_5H )) ] || return 1
+  case "${s:-}" in (active|idle|warming) ;; (*) return 1 ;; esac
+  # Canonical form, the same rule state_epoch applies: a leading zero is
+  # rejected rather than tolerated, because these three fields reach bash
+  # arithmetic in burn_b5_line, where 08 is an invalid octal literal and
+  # leaks a diagnostic onto the render's stderr instead of falling back.
+  case "${sp:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#sp}" -le 5 ] && [ "$sp" -le 86400 ] || return 1
+  case "${d:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#d}" -le 6 ] && [ "$d" -le 100000 ] || return 1
+  case "${l:-}" in (''|*[!0-9]*|0[0-9]*) return 1 ;; esac
+  [ "${#l}" -le 6 ] && [ "$l" -le 100000 ] || return 1
+  # ttr derives locally from the published window and our own NOW, so a
+  # 1-3s-old estimate cannot trip the rebind gate into warming flicker.
+  t=$(( rst - NOW )); [ "$t" -lt 0 ] && t=0
+  burn_b5_line "$s $sp $d $l $t"
+}
+
 burn_estimate() {  # → _BURN_STATE _BURN_LABEL _BURN_ETA _BURN_RATE _BURN_TTR
-  local f5=0 f7=0
-  burn_eta_5h "${_STATE_MUTATE:-0}"
+  local f5=0 f7=0 m=0
+  # Trim/heal mutation follows the same per-(tick, window, pct) election as
+  # the append: a claim winner runs the full parse (and publishes its result);
+  # a session that lost to a covering claim adopts the published estimate
+  # when it validates, and everything else takes the plain read-only parse.
+  [ "${_STATE_MUTATE:-0}" = 1 ] && state_burn_lead && m=1
+  if [ "$m" = 1 ]; then
+    burn_eta_5h 1
+    burn_est_publish
+  elif [ "${_BURN_LOST:-0}" = 1 ] && [ "${_CUR_BURN_VALID:-0}" = 1 ] && burn_est_adopt; then
+    :
+  else
+    burn_eta_5h 0
+  fi
   # The 5h projection needs the same rebinding the 7d one gets: whenever the synced
   # state is what the gauge draws, the ETA has to be projected from that same window.
   # Two ways they diverge. With no reading of our own the history can still sit on
@@ -1158,6 +1449,7 @@ model_short() {
   _MS="$1"
   case "$s" in (claude-*) ;; (*) return 0 ;; esac
   s="${s#claude-}"
+  case "$s" in (*']') s="${s%[[]*}" ;; esac  # context suffix, e.g. claude-opus-5-5[1m]
   case "$s" in (*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) s="${s%-*}" ;; esac
   fam="${s%%-*}" ; ver="${s#"$fam"}" ; ver="${ver#-}"
   case "$ver" in (''|*[!0-9-]*) return 0 ;; esac
@@ -1401,6 +1693,37 @@ seg_ctx() {  # context-window gauge with input/output/cache token counts
 
 }
 
+seg_cache() {  # prompt-cache hit ratio, and the countdown to the cache expiring
+  [ -n "$cache_pct" ] || return 0
+  local v fgc dfg left diff
+  printf -v v '%.0f' "$cache_pct" 2>/dev/null || v=0
+  # Inverted thresholds: cache hits are the good outcome, so 98% must read green
+  # where the same number on a usage gauge reads red.
+  pct_fg $(( 100 - v ))
+  fg "$_PFG"; fgc="$_FG"
+  fg "$VL_FG_DIM"; dfg="$_FG"
+  # The percentage is the session's cumulative hit ratio, so it stays true after the
+  # cache goes cold and is never zeroed. What changes is whether anything about it is
+  # still live, and that has to be visible: without a marker a cold pill and a warm
+  # one differ only by an absence, which reads as 98% of a cache that is gone.
+  # expires_at keeps its last value once the cache goes cold and is absent entirely
+  # when the cache never went warm; both are the same thing to read, so both take the
+  # marker. Under an hour the countdown carries seconds, because the short TTL is 5
+  # minutes and a minute-only countdown would sit on 4m for most of it; from an hour
+  # up they are dropped, where the long TTL has no use for that precision and the pill
+  # stays narrow. The row only refreshes on payload events, so read the countdown as
+  # the value at the last render, not a live clock.
+  left="${dfg}cold"
+  if to_epoch "$cache_exp"; then
+    diff=$(( _EP - NOW ))
+    if [ "$diff" -gt 0 ]; then
+      fmt_duration $(( diff * 1000 )) $(( diff < 3600 ))
+      left="${dfg}↺${_DUR}"
+    fi
+  fi
+  push "${VL_BG_CACHE:-$VL_BG_CTX}" "${fgc} ${VL_CACHE_GLYPH} ${v}% ${left} "
+}
+
 seg_limit() {  # $1=label $2=pct $3=resets_at $4=bg $5=canonical pct_milli(optional)
   [ -n "$2" ] || return 0
   local v fgc rst="" clk
@@ -1622,15 +1945,6 @@ seg_vim() {  # vim mode (.vim.mode) — hidden unless vim mode is on
   push "$VL_BG_VIM" "${_FG} ⌨ ${vim_mode} "
 }
 
-seg_cache() {  # cache hit rate from token counts already on stdin
-  local cr="${tok_cr:-0}" cw="${tok_cw:-0}" total hit
-  case "$cr$cw" in *[!0-9]*) return 0 ;; esac
-  total=$(( cr + cw )); [ "$total" -gt 0 ] || return 0
-  hit=$(( (cr * 100 + total / 2) / total ))
-  pct_fg $(( 100 - hit )); fg "$_PFG"           # high hit rate is good → green
-  push "$VL_BG_CACHE" "${_FG} ↯ ${hit}% "
-}
-
 seg_worktree() {  # location badge — repo in the main worktree, repo ▸ suffix in a
                   # linked worktree. Prefers Claude Code's .worktree.* when present.
   fg "$VL_FG_TEXT"
@@ -1783,12 +2097,17 @@ sub_epoch() {  # → _EP ; strict startTime parser for the per-task loop.
   esac
 }
 
-subagent_role() {  # → _SUB_ROLE ; $1=transcript path $2=task id
-  local transcript="$1" id="$2" path line role
-  _SUB_ROLE=""
+subagent_base() {  # → _SUB_BASE ; $1=transcript path $2=task id; sidecar path minus extension
+  local transcript="$1" id="$2"
+  _SUB_BASE=""
   case "$id" in (''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-]*) return 1 ;; esac
-  case "$transcript" in (*.jsonl) path="${transcript%.jsonl}/subagents/agent-${id}.meta.json" ;; (*) return 1 ;; esac
-  path="${path//\\//}"  # native Windows payload paths use backslashes; Git Bash accepts C:/...
+  case "$transcript" in (*.jsonl) _SUB_BASE="${transcript%.jsonl}/subagents/agent-${id}" ;; (*) return 1 ;; esac
+  _SUB_BASE="${_SUB_BASE//\\//}"  # native Windows payload paths use backslashes; Git Bash accepts C:/...
+}
+
+subagent_role() {  # → _SUB_ROLE ; reads $_SUB_BASE.meta.json
+  local path="$_SUB_BASE.meta.json" line role
+  _SUB_ROLE=""
   [ -r "$path" ] || return 1
   IFS= read -r line < "$path" || [ -n "$line" ] || return 1
   case "$line" in
@@ -1797,6 +2116,31 @@ subagent_role() {  # → _SUB_ROLE ; $1=transcript path $2=task id
   esac
   case "$role" in (''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-]*) return 1 ;; esac
   _SUB_ROLE="$role"
+}
+
+subagent_effort() {  # → _SUB_EFFORT ; effort the task's first API response recorded
+  # Claude Code writes the effort it actually sent on every assistant line of the
+  # subagent transcript, and omits it where it sent none (Haiku 4.5), so this is
+  # the applied value — unlike the payload's `effort`, which is the definition's
+  # raw frontmatter and absent for agents running at the model default. Only the
+  # first assistant line is read, looking at most 64 lines in. Across 714 local
+  # transcripts (CC 2.1.222-2.1.280) it sat on line 2-18: sessions that load more
+  # skills, memory and hooks put more attachment lines ahead of it, which is why
+  # an earlier bound of 16 missed some. No transcript recorded more than one
+  # level. The
+  # anchor `","perTurnEffort":` cannot occur unescaped inside a JSON string value.
+  local path="$_SUB_BASE.jsonl" line lvl n=0
+  _SUB_EFFORT=""
+  [ -r "$path" ] || return 1
+  while [ "$n" -lt 64 ] && IFS= read -r line; do
+    n=$((n + 1))
+    case "$line" in (*'"type":"assistant"'*) ;; (*) continue ;; esac
+    case "$line" in (*'","perTurnEffort":'*) ;; (*) return 1 ;; esac
+    lvl="${line%%\",\"perTurnEffort\":*}"; lvl="${lvl##*\"effort\":\"}"
+    case "$lvl" in (low|medium|high|xhigh|max) _SUB_EFFORT="$lvl"; return 0 ;; esac
+    return 1
+  done < "$path"
+  return 1
 }
 
 subseg_name() {  # identity + task label; each falls back independently
@@ -1826,6 +2170,14 @@ subseg_model() {  # per-task resolved model, short-named; hidden when unresolved
   model_short "$t_model"
   fg "$VL_FG_TEXT"
   push "${VL_BG_SUB_MODEL:-$VL_BG_MODEL}" "${BOLD}${_FG} ◆ ${_MS} ${NORM}"
+}
+
+subseg_effort() {  # per-task applied reasoning effort; hidden until the first response
+  [ -n "$t_effort" ] || return 0
+  local label="$t_effort"
+  [ "$label" = medium ] && label="med"
+  fg "$VL_FG_TEXT"
+  push "${VL_BG_SUB_EFFORT:-$VL_BG_EFFORT}" "${_FG} ψ ${label} "
 }
 
 subseg_ctx() {  # per-task context gauge; bare token count without a window size
@@ -1982,8 +2334,11 @@ if [ "$SUBAGENT_MODE" = "1" ]; then
     [ "$sub_kind" = "task" ] || continue
     t_tok="${t_tok%$'\r'}"  # native Windows jq writes CRLF; input CR was scrubbed above
     [ -n "$t_id" ] || continue
-    t_role=""
-    [ "$t_type" = "local_agent" ] && subagent_role "$t_transcript" "$t_id" && t_role="$_SUB_ROLE"
+    t_role="" ; t_effort=""
+    if [ "$t_type" = "local_agent" ] && subagent_base "$t_transcript" "$t_id"; then
+      subagent_role && t_role="$_SUB_ROLE"
+      case " $VL_SUB_SEGMENTS " in (*' effort '*) subagent_effort && t_effort="$_SUB_EFFORT" ;; esac
+    fi
     SEG_BGS=() ; SEG_TXT=() ; SEG_LEN=()
     for s in $VL_SUB_SEGMENTS; do
       command -v "subseg_$s" >/dev/null 2>&1 && "subseg_$s"
@@ -2056,18 +2411,24 @@ if _JSON_FIELDS=$(printf '%s' "$input" | jq -r '
     (member(member(member(.; "rate_limits"); "seven_day_sonnet"); "used_percentage") // "" | tostring),
     (member(member(member(.; "rate_limits"); "seven_day_sonnet"); "resets_at") // "" | tostring),
     (member(member(member(.; "rate_limits"); "seven_day_opus"); "used_percentage") // "" | tostring),
-    (member(member(member(.; "rate_limits"); "seven_day_opus"); "resets_at") // "" | tostring)
+    (member(member(member(.; "rate_limits"); "seven_day_opus"); "resets_at") // "" | tostring),
+    ((member(member(.; "prompt_cache"); "hit_ratio")) as $h |
+      if ($h|type) == "number" then ($h * 100 | tostring) else "" end),
+    ((member(member(.; "prompt_cache"); "expires_at")) as $x |
+      if ($x|type) == "number" then ($x | tostring) else "" end)
   ] | map(scrub) | join("\u001f")
   end' 2>/dev/null); then
   _JSON_OK=1
 fi
-# The trailing block (vim_mode..o7_rst) is this fork's extra segments, appended
-# rather than interleaved so the field order above stays diffable against upstream.
+# The vim_mode..o7_rst block is this fork's extra segments, kept as one block so
+# the field order stays diffable against upstream; upstream's later fields
+# (cache_pct cache_exp) follow it.
 IFS=$'\037' read -r cwd model ctx_pct _CTX_EMPTY tok_in tok_out tok_cr tok_cw \
                  fh_pct fh_rst wd_pct wd_rst cost _COST_KIND \
                  lines_add lines_del out_style dur_ms effort \
                  vim_mode cc_ver session_id wt_name wt_branch \
-                 s7_pct s7_rst o7_pct o7_rst <<JSON
+                 s7_pct s7_rst o7_pct o7_rst \
+                 cache_pct cache_exp <<JSON
 $_JSON_FIELDS
 JSON
 

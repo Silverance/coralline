@@ -25,8 +25,33 @@ Check the actual shell and tools before choosing a path:
   `install.sh`, do not install `jq`, and do not expect a wizard.
 
 For the native path, explain that `install.ps1` writes only `statusline.ps1` and
-the ten shipped themes under `$HOME\.claude\coralline`, then losslessly merges
-the exact-case top-level `statusLine` value in `$HOME\.claude\settings.json`.
+the ten shipped themes under `$HOME\.claude\coralline` (plus `statusline.sh` when
+it selects the Bash runtime, see below), then losslessly merges
+the exact-case top-level `statusLine` value in `$HOME\.claude\settings.json`,
+with `refreshInterval: 2` for the native renderer. Claude Code aborts an in-flight statusline render
+the moment the next refresh tick fires, and the native renderer takes close
+to a second, so `refreshInterval: 1` would abort nearly every render before
+it finishes; `2` gives the render room to complete. Rerunning `install.ps1`
+replaces the whole `statusLine` value, so an existing `refreshInterval`
+becomes `2` for the native renderer and `1` for the Bash renderer.
+`install.ps1 -Runtime auto|native|bash` (the bootstrap's `$runtime`) picks the
+renderer. The default `auto` selects the Bash renderer (`statusline.sh` through
+Git Bash, `refreshInterval: 1`) when Git for Windows is installed for all users
+in its standard location (`HKLM\SOFTWARE\GitForWindows` `InstallPath`, else
+`%ProgramFiles%\Git`) and that `bash.exe` finds `jq`, and otherwise falls back
+to native; it prints the runtime it selected and, after a fallback, why.
+`-Runtime native` never probes for Git Bash; `-Runtime bash` fails before
+changing anything when Git Bash or `jq` is missing. Per-user and junctioned
+(Scoop) Git installs are not detected. Tell the user before running that the
+Bash renderer sources `coralline.conf` as shell code (it executes it) while the
+native renderer only parses it, so a native install rerun under `auto` on a
+machine with Git Bash and `jq` switches to the Bash renderer (the installer
+prints this note whenever it selects Bash, under `auto` or `-Runtime bash`); pass
+`-Runtime native` (or set `$runtime="native"` in the bootstrap) if they want to
+stay native. Switching back to native never deletes `statusline.sh`, and a
+`subagentStatusLine` that holds the other runtime's coralline command for this install,
+or a Bash command for this install naming a different `bash.exe`, moves
+to the selected runtime even under `preserve`.
 It never creates or edits `$HOME\.claude\coralline.conf`. Ask whether the user
 wants native themed subagent rows: pass `-SubagentRows on` only after yes,
 `-SubagentRows off` only for an explicit disable request, and otherwise keep the
@@ -95,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/Silverance/coralline/main/install.s
 
 This path is non-interactive, so it installs from `main` and skips the version prompt. To
 install a tagged release instead, ask the user which they want and pass `--ref`, e.g.
-`--ref v0.13.0` (latest release) or leave it as `main` (latest development).
+`--ref v0.18.1` (latest release) or leave it as `main` (latest development).
 
 If the user is testing a fork, keep the downloaded installer and runtime files on the same
 repo:
@@ -213,9 +238,12 @@ Ask concise questions. If the user says "you decide", choose the defaults.
    else `node` on `PATH`) and `python` the active env (`$VIRTUAL_ENV` / conda /
    `.python-version`, else `python3`); each stays hidden until something is detected.
    Write the chosen segments to `VL_SEGMENTS` in this canonical order (keep only the
-   ones the user wants): `dir project git node python model effort ctx limit5h limit7d
-   burn lines cost style duration stash clock`. So opting in `effort` lands it right
-   after `model`.
+   ones the user wants): `dir project git node python model effort ctx cache limit5h
+   limit7d burn lines cost style duration stash clock`. So opting in `effort` lands it
+   right after `model`.
+   `cache` (prompt-cache hit ratio plus the countdown to the cache expiring) reads
+   `prompt_cache` from the payload, which Claude Code only sends on v2.1.263 and newer;
+   on an older build it stays hidden with no other effect.
    `burn` (projected time until a rate limit binds) writes a small sample file to
    `~/.claude/coralline/burn-5h.tsv` while it is in the list, and nothing when it is not.
 4. **Layout**: responsive default (`VL_LAYOUT="auto"`, `VL_MAX_LINES=3`), single line,
